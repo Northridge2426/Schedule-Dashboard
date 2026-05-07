@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fort Simpson Kennels — Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f1f5f9; color: #1e293b; }
+
+    /* ---- Login ---- */
+    #login-view { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
+    #login-view h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.25rem; }
+    #login-view p { color: #64748b; margin-bottom: 2rem; }
+    #login-view input { width: 100%; max-width: 320px; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 1rem; margin-bottom: 0.75rem; outline: none; }
+    #login-view input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+    #login-view button { width: 100%; max-width: 320px; padding: 0.75rem 1rem; background: #1e293b; color: white; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; font-weight: 500; }
+    #login-view button:hover { background: #334155; }
+    #login-view button:disabled { opacity: 0.6; cursor: default; }
+    #login-msg { margin-top: 1rem; font-size: 0.875rem; }
+
+    /* ---- Header ---- */
+    header { background: #1e293b; color: white; padding: 0.875rem 1.5rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 10; }
+    header h1 { font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; }
+    #logout-btn { background: none; border: 1px solid #475569; color: #94a3b8; padding: 0.3rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+    #logout-btn:hover { background: #334155; color: white; }
+
+    /* ---- Layout ---- */
+    main { max-width: 1140px; margin: 0 auto; padding: 1.25rem; display: grid; gap: 1.25rem; grid-template-columns: 1fr; }
+    @media (min-width: 640px) { main { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 1024px) { main { grid-template-columns: 1fr 1fr 1fr; } }
+
+    /* ---- Cards ---- */
+    .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04); overflow: hidden; }
+    .card.full { grid-column: 1 / -1; }
+    .card-header { padding: 0.875rem 1.25rem; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; }
+    .card-header h2 { font-size: 0.875rem; font-weight: 600; color: #1e293b; text-transform: uppercase; letter-spacing: 0.04em; }
+    .card-body { padding: 1rem 1.25rem; }
+
+    /* ---- Badges ---- */
+    .badge { font-size: 0.7rem; font-weight: 600; padding: 0.2rem 0.55rem; border-radius: 99px; }
+    .badge-green { background: #dcfce7; color: #15803d; }
+    .badge-yellow { background: #fef9c3; color: #92400e; }
+    .badge-red { background: #fee2e2; color: #b91c1c; }
+    .badge-blue { background: #dbeafe; color: #1d4ed8; }
+    .badge-purple { background: #f3e8ff; color: #7c3aed; }
+    .badge-gray { background: #f1f5f9; color: #64748b; }
+
+    /* ---- Capacity bar ---- */
+    .cap-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+    .cap-track { flex: 1; height: 6px; background: #e2e8f0; border-radius: 99px; overflow: hidden; }
+    .cap-fill { height: 100%; border-radius: 99px; transition: width 0.4s; }
+    .cap-fill.ok   { background: #22c55e; }
+    .cap-fill.warn { background: #f59e0b; }
+    .cap-fill.high { background: #ef4444; }
+    .cap-text { font-size: 0.8rem; color: #64748b; white-space: nowrap; }
+
+    /* ---- Kennel grid ---- */
+    .kennel-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem; }
+    @media (min-width: 480px) { .kennel-grid { grid-template-columns: repeat(10, 1fr); } }
+    .kennel-cell { border-radius: 8px; padding: 0.6rem 0.4rem; text-align: center; border: 2px solid transparent; }
+    .kennel-cell.active  { background: #dcfce7; border-color: #86efac; }
+    .kennel-cell.pending { background: #fef9c3; border-color: #fde047; }
+    .kennel-cell.empty   { background: #f8fafc; border-color: #e2e8f0; }
+    .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
+    .k-dog  { font-size: 0.78rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
+    .k-date { font-size: 0.65rem; color: #94a3b8; margin-top: 0.2rem; }
+    .kennel-cell.active  .k-dog { color: #15803d; }
+    .kennel-cell.pending .k-dog { color: #92400e; }
+    .kennel-cell.empty   .k-dog { color: #cbd5e1; }
+
+    /* ---- Today section ---- */
+    .today-group { margin-bottom: 0.875rem; }
+    .today-group:last-child { margin-bottom: 0; }
+    .today-group-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.35rem; }
+    .today-row { font-size: 0.875rem; padding: 0.25rem 0; display: flex; align-items: baseline; gap: 0.4rem; }
+    .today-row .meta { font-size: 0.78rem; color: #94a3b8; }
+
+    /* ---- Tables ---- */
+    .tbl { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .tbl th { text-align: left; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8; padding: 0.4rem 0.6rem; border-bottom: 1px solid #f1f5f9; }
+    .tbl td { padding: 0.55rem 0.6rem; border-bottom: 1px solid #f8fafc; vertical-align: middle; }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl tr:hover td { background: #fafafa; }
+
+    /* ---- Priority dots ---- */
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; flex-shrink: 0; }
+    .p-urgent      { background: #ef4444; }
+    .p-high        { background: #f97316; }
+    .p-medium_high { background: #f59e0b; }
+    .p-medium      { background: #3b82f6; }
+    .p-medium_low  { background: #8b5cf6; }
+    .p-low         { background: #cbd5e1; }
+    .p-none        { background: #e2e8f0; }
+
+    /* ---- Task list ---- */
+    .task-cols { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
+    @media (min-width: 640px) { .task-cols { grid-template-columns: repeat(3, 1fr); } }
+    .task-col-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.5rem; }
+    .task-row { display: flex; align-items: baseline; gap: 0.35rem; padding: 0.3rem 0; border-bottom: 1px solid #f8fafc; font-size: 0.85rem; }
+    .task-row:last-child { border-bottom: none; }
+
+    /* ---- Reminders ---- */
+    .reminder-row { display: flex; gap: 0.75rem; padding: 0.45rem 0; border-bottom: 1px solid #f8fafc; align-items: flex-start; }
+    .reminder-row:last-child { border-bottom: none; }
+    .reminder-date { font-size: 0.75rem; color: #94a3b8; white-space: nowrap; min-width: 60px; padding-top: 0.05rem; }
+    .reminder-date.overdue { color: #ef4444; font-weight: 600; }
+    .reminder-text { font-size: 0.875rem; }
+
+    /* ---- Shopping ---- */
+    .shop-row { font-size: 0.875rem; padding: 0.35rem 0; border-bottom: 1px solid #f8fafc; }
+    .shop-row:last-child { border-bottom: none; }
+
+    /* ---- Empty / loading ---- */
+    .empty { font-size: 0.85rem; color: #cbd5e1; padding: 0.5rem 0; }
+    .loading { font-size: 0.85rem; color: #cbd5e1; padding: 0.75rem 0; text-align: center; }
+
+    /* ---- Date chip ---- */
+    #today-chip { font-size: 0.8rem; color: #94a3b8; }
+  </style>
+</head>
+<body>
+
+<!-- LOGIN VIEW -->
+<div id="login-view">
+  <h1>Fort Simpson Kennels</h1>
+  <p>Schedule &amp; Kennel Dashboard</p>
+  <input type="email" id="email-input" placeholder="your@email.com" autocomplete="email" />
+  <button id="magic-link-btn">Send Magic Link</button>
+  <div id="login-msg"></div>
+</div>
+
+<!-- DASHBOARD VIEW -->
+<div id="dashboard-view" style="display:none">
+  <header>
+    <h1>Fort Simpson Kennels</h1>
+    <div style="display:flex;align-items:center;gap:1rem">
+      <span id="today-chip"></span>
+      <button id="logout-btn">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- Kennel Status (full width) -->
+    <div class="card full" id="card-kennels">
+      <div class="card-header">
+        <h2>Kennel Status</h2>
+        <span id="cap-badge" class="badge badge-gray"></span>
+      </div>
+      <div class="card-body">
+        <div class="cap-row">
+          <div class="cap-track"><div id="cap-fill" class="cap-fill ok" style="width:0%"></div></div>
+          <span id="cap-text" class="cap-text"></span>
+        </div>
+        <div class="kennel-grid" id="kennel-grid"></div>
+      </div>
+    </div>
+
+    <!-- Today -->
+    <div class="card" id="card-today">
+      <div class="card-header">
+        <h2>Today</h2>
+        <span id="today-date-badge" class="badge badge-blue"></span>
+      </div>
+      <div class="card-body" id="today-body"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- Pending Cleanings -->
+    <div class="card" id="card-cleanings">
+      <div class="card-header">
+        <h2>Pending Cleanings</h2>
+        <span id="clean-count" class="badge badge-gray"></span>
+      </div>
+      <div class="card-body" id="cleanings-body"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- Invoice Overview -->
+    <div class="card" id="card-invoices">
+      <div class="card-header"><h2>Invoices</h2></div>
+      <div class="card-body" id="invoices-body"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- Reminders -->
+    <div class="card" id="card-reminders">
+      <div class="card-header"><h2>Reminders</h2></div>
+      <div class="card-body" id="reminders-body"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- Shopping -->
+    <div class="card" id="card-shopping">
+      <div class="card-header"><h2>Shopping — Local</h2></div>
+      <div class="card-body" id="shopping-body"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- Tasks & Projects (full width) -->
+    <div class="card full" id="card-tasks">
+      <div class="card-header"><h2>Tasks &amp; Projects</h2></div>
+      <div class="card-body" id="tasks-body"><div class="loading">Loading…</div></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+const SUPABASE_URL  = 'https://blzxlqrueamcuxktdeaw.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsenhscXJ1ZWFtY3V4a3RkZWF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxNjI0ODQsImV4cCI6MjA5MzczODQ4NH0.-izfg5UIy5uWlSOX0Wz5op5v6HqwbckMmieP-N2sUmQ';
+
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// ============================================================
+// AUTH
+// ============================================================
+
+const $login = document.getElementById('login-view');
+const $dash  = document.getElementById('dashboard-view');
+
+db.auth.onAuthStateChange((_event, session) => {
+  if (session) { $login.style.display = 'none'; $dash.style.display = 'block'; loadAll(); }
+  else         { $login.style.display = 'flex';  $dash.style.display = 'none'; }
+});
+
+document.getElementById('magic-link-btn').addEventListener('click', async () => {
+  const email = document.getElementById('email-input').value.trim();
+  const btn   = document.getElementById('magic-link-btn');
+  const msg   = document.getElementById('login-msg');
+  if (!email) { msg.style.color = '#ef4444'; msg.textContent = 'Please enter your email.'; return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const { error } = await db.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.origin + window.location.pathname }
+  });
+  if (error) { msg.style.color = '#ef4444'; msg.textContent = error.message; }
+  else        { msg.style.color = '#16a34a'; msg.textContent = '✓ Check your email for the magic link!'; }
+  btn.disabled = false; btn.textContent = 'Send Magic Link';
+});
+
+document.getElementById('logout-btn').addEventListener('click', () => db.auth.signOut());
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+function fmtDate(d) {
+  if (!d) return '—';
+  const [,m,day] = d.split('-');
+  return `${MONTHS[+m-1]} ${+day}`;
+}
+
+function fmtTime(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':');
+  const hr = +h;
+  return `${hr % 12 || 12}:${m}${hr >= 12 ? 'pm' : 'am'}`;
+}
+
+function todayFull() {
+  const d = new Date();
+  return `${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+function tomorrowStr() {
+  const d = new Date(); d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+// ============================================================
+// LOAD ALL
+// ============================================================
+
+async function loadAll() {
+  document.getElementById('today-chip').textContent        = todayFull();
+  document.getElementById('today-date-badge').textContent  = todayFull();
+
+  const [rBook, rClean, rTask, rRemind, rShop, rInv] = await Promise.all([
+    db.from('bookings').select('*').order('check_in_date'),
+    db.from('cleanings').select('*').not('status', 'in', '("completed","skipped")').order('scheduled_date'),
+    db.from('tasks').select('*').eq('status', 'active'),
+    db.from('reminders').select('*').eq('status', 'active').order('target_date', { nullsFirst: false }),
+    db.from('shopping_items').select('*').eq('status', 'active').eq('list_name', 'local'),
+    db.from('invoices').select('*, bookings(dog_name, kennel_number, check_in_date, check_out_date)').neq('status', 'paid'),
+  ]);
+
+  const bookings  = rBook.data  || [];
+  const cleanings = rClean.data || [];
+  const tasks     = rTask.data  || [];
+  const reminders = rRemind.data|| [];
+  const shopping  = rShop.data  || [];
+  const invoices  = rInv.data   || [];
+
+  renderKennels(bookings);
+  renderToday(bookings, cleanings);
+  renderCleanings(cleanings);
+  renderInvoices(invoices, bookings);
+  renderReminders(reminders);
+  renderShopping(shopping);
+  renderTasks(tasks);
+}
+
+// ============================================================
+// KENNEL STATUS
+// ============================================================
+
+function renderKennels(bookings) {
+  const td = todayStr();
+  const kennelMap = {};
+
+  // Active stays occupy their kennel now
+  bookings.filter(b => b.status === 'active').forEach(b => {
+    kennelMap[b.kennel_number] = { ...b, display: 'active' };
+  });
+  // Pending future bookings show as yellow if kennel not already active
+  bookings.filter(b => b.status === 'pending').forEach(b => {
+    if (!kennelMap[b.kennel_number]) kennelMap[b.kennel_number] = { ...b, display: 'pending' };
+  });
+
+  const occupied = Object.keys(kennelMap).length;
+  const pct = (occupied / 10) * 100;
+  const levelClass = occupied >= 5 ? 'high' : occupied >= 4 ? 'warn' : 'ok';
+  document.getElementById('cap-fill').style.width = pct + '%';
+  document.getElementById('cap-fill').className   = 'cap-fill ' + levelClass;
+  document.getElementById('cap-text').textContent  = `${occupied} / 10 kennels occupied`;
+
+  const badge = document.getElementById('cap-badge');
+  if (occupied >= 5) {
+    badge.textContent = '⚠ Over 40% capacity';
+    badge.className   = 'badge badge-red';
+  } else {
+    badge.textContent = occupied + ' occupied';
+    badge.className   = 'badge badge-gray';
+  }
+
+  const grid = document.getElementById('kennel-grid');
+  grid.innerHTML = '';
+  for (let k = 1; k <= 10; k++) {
+    const b    = kennelMap[k];
+    const cell = document.createElement('div');
+    cell.className = 'kennel-cell ' + (b ? b.display : 'empty');
+    const dateLabel = b
+      ? (b.display === 'active'
+          ? 'Out ' + fmtDate(b.check_out_date)
+          : 'In '  + fmtDate(b.check_in_date))
+      : '';
+    cell.innerHTML = `
+      <div class="k-num">K${k}</div>
+      <div class="k-dog">${b ? b.dog_name : '—'}</div>
+      <div class="k-date">${dateLabel}</div>`;
+    grid.appendChild(cell);
+  }
+}
+
+// ============================================================
+// TODAY
+// ============================================================
+
+function renderToday(bookings, cleanings) {
+  const td  = todayStr();
+  const tmr = tomorrowStr();
+
+  const checkouts    = bookings.filter(b => b.check_out_date === td  && b.status === 'active');
+  const checkins     = bookings.filter(b => b.check_in_date  === td  && (b.status === 'pending' || b.status === 'active'));
+  const tmrCheckouts = bookings.filter(b => b.check_out_date === tmr && b.status === 'active');
+  const tmrCheckins  = bookings.filter(b => b.check_in_date  === tmr && b.status === 'pending');
+  const todayClean   = cleanings.filter(c => c.scheduled_date === td);
+
+  let parts = [];
+
+  if (checkouts.length) {
+    let h = '<div class="today-group"><div class="today-group-label">Checkouts</div>';
+    checkouts.forEach(b => {
+      const time    = b.check_out_time ? fmtTime(b.check_out_time) : 'time TBD';
+      const offsite = b.notes && b.notes.toLowerCase().includes('off-site') ? ' <span class="badge badge-purple">Off-site</span>' : '';
+      h += `<div class="today-row">🔴 <strong>${b.dog_name}</strong> — K${b.kennel_number} <span class="meta">${time}${offsite}</span></div>`;
+    });
+    h += '</div>';
+    parts.push(h);
+  }
+
+  if (checkins.length) {
+    let h = '<div class="today-group"><div class="today-group-label">Check-ins</div>';
+    checkins.forEach(b => {
+      const time = b.check_in_time ? fmtTime(b.check_in_time) : 'time TBD';
+      h += `<div class="today-row">🟢 <strong>${b.dog_name}</strong> — K${b.kennel_number} <span class="meta">${time}</span></div>`;
+    });
+    h += '</div>';
+    parts.push(h);
+  }
+
+  if (todayClean.length) {
+    let h = '<div class="today-group"><div class="today-group-label">Cleanings</div>';
+    todayClean.forEach(c => {
+      const label = c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)';
+      h += `<div class="today-row">🧹 K${c.kennel_number} — <span class="meta">${label}</span></div>`;
+    });
+    h += '</div>';
+    parts.push(h);
+  }
+
+  if (tmrCheckouts.length || tmrCheckins.length) {
+    let h = '<div class="today-group"><div class="today-group-label">Tomorrow</div>';
+    tmrCheckouts.forEach(b => {
+      h += `<div class="today-row" style="color:#94a3b8">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div>`;
+    });
+    tmrCheckins.forEach(b => {
+      h += `<div class="today-row" style="color:#94a3b8">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div>`;
+    });
+    h += '</div>';
+    parts.push(h);
+  }
+
+  document.getElementById('today-body').innerHTML = parts.length
+    ? parts.join('')
+    : '<div class="empty">Nothing scheduled for today.</div>';
+}
+
+// ============================================================
+// CLEANINGS
+// ============================================================
+
+function renderCleanings(cleanings) {
+  document.getElementById('clean-count').textContent = cleanings.length;
+  if (!cleanings.length) {
+    document.getElementById('cleanings-body').innerHTML = '<div class="empty">No pending cleanings.</div>';
+    return;
+  }
+  const td = todayStr();
+  let html = '<table class="tbl"><thead><tr><th>Kennel</th><th>Type</th><th>Date</th><th>Reason</th></tr></thead><tbody>';
+  cleanings.forEach(c => {
+    const overdue = c.scheduled_date && c.scheduled_date < td;
+    const dateCell = c.scheduled_date
+      ? `<span style="color:${overdue ? '#ef4444' : 'inherit'}">${fmtDate(c.scheduled_date)}${overdue ? ' ⚠' : ''}</span>`
+      : '—';
+    const typeLabel = c.type === 'quick_refresh'
+      ? '<span class="badge badge-blue">Quick</span>'
+      : '<span class="badge badge-gray">Full</span>';
+    html += `<tr>
+      <td><strong>K${c.kennel_number}</strong></td>
+      <td>${typeLabel}</td>
+      <td>${dateCell}</td>
+      <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('cleanings-body').innerHTML = html;
+}
+
+// ============================================================
+// INVOICES
+// ============================================================
+
+function renderInvoices(pendingInvoices, bookings) {
+  // Also surface completed bookings with no invoice yet
+  const invoicedBookingIds = pendingInvoices.map(i => i.booking_id);
+  const needInvoice = bookings.filter(b =>
+    b.status === 'completed' && !invoicedBookingIds.includes(b.id)
+  );
+
+  let html = '';
+
+  if (pendingInvoices.length) {
+    html += '<div style="margin-bottom:0.875rem">';
+    pendingInvoices.forEach(i => {
+      const b = i.bookings;
+      const statusBadge = i.status === 'sent'
+        ? '<span class="badge badge-blue">Sent</span>'
+        : '<span class="badge badge-yellow">Pending</span>';
+      html += `<div style="padding:0.45rem 0;border-bottom:1px solid #f8fafc">
+        <div style="font-size:0.875rem;display:flex;align-items:center;gap:0.5rem">
+          <strong>${b ? b.dog_name : '?'}</strong> — K${b ? b.kennel_number : '?'} ${statusBadge}
+        </div>
+        <div style="font-size:0.78rem;color:#94a3b8;margin-top:0.2rem">
+          ${i.days_billed} day${i.days_billed !== 1 ? 's' : ''}${i.weeks_billed ? ` (${i.weeks_billed} wk)` : ''} · Invoice ${fmtDate(i.invoice_date)}
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  if (needInvoice.length) {
+    html += '<div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#94a3b8;margin-bottom:0.35rem">Awaiting Invoice</div>';
+    needInvoice.forEach(b => {
+      html += `<div style="font-size:0.875rem;color:#94a3b8;padding:0.25rem 0">${b.dog_name} — K${b.kennel_number} (out ${fmtDate(b.check_out_date)})</div>`;
+    });
+  }
+
+  document.getElementById('invoices-body').innerHTML = html || '<div class="empty">No pending invoices.</div>';
+}
+
+// ============================================================
+// REMINDERS
+// ============================================================
+
+function renderReminders(reminders) {
+  if (!reminders.length) {
+    document.getElementById('reminders-body').innerHTML = '<div class="empty">No active reminders.</div>';
+    return;
+  }
+  const td = todayStr();
+  let html = '';
+  reminders.forEach(r => {
+    const overdue = r.target_date && r.target_date < td;
+    const datePart = r.target_date
+      ? `<span class="reminder-date ${overdue ? 'overdue' : ''}">${fmtDate(r.target_date)}</span>`
+      : `<span class="reminder-date">📌 ongoing</span>`;
+    html += `<div class="reminder-row">${datePart}<div class="reminder-text">${r.text}</div></div>`;
+  });
+  document.getElementById('reminders-body').innerHTML = html;
+}
+
+// ============================================================
+// SHOPPING
+// ============================================================
+
+function renderShopping(items) {
+  document.getElementById('shopping-body').innerHTML = items.length
+    ? items.map(i => `<div class="shop-row">${i.item}</div>`).join('')
+    : '<div class="empty">Local list is empty.</div>';
+}
+
+// ============================================================
+// TASKS
+// ============================================================
+
+const PRIORITY_LABEL = {
+  urgent: 'Urgent', high: 'High', medium_high: 'Med-High',
+  medium: 'Medium', medium_low: 'Med-Low', low: 'Low', none: '—'
+};
+
+function renderTasks(tasks) {
+  const groups = {
+    task:           { label: 'Task List',       items: [] },
+    project:        { label: 'Projects',         items: [] },
+    office_project: { label: 'Office Projects',  items: [] },
+  };
+
+  const PORDER = ['urgent','high','medium_high','medium','medium_low','low','none'];
+  tasks.forEach(t => { if (groups[t.category]) groups[t.category].items.push(t); });
+  Object.values(groups).forEach(g => {
+    g.items.sort((a, b) => PORDER.indexOf(a.priority) - PORDER.indexOf(b.priority));
+  });
+
+  let html = '<div class="task-cols">';
+  for (const [, g] of Object.entries(groups)) {
+    html += `<div><div class="task-col-title">${g.label}</div>`;
+    if (!g.items.length) { html += '<div class="empty">Empty</div>'; }
+    else g.items.forEach(t => {
+      html += `<div class="task-row"><span class="dot p-${t.priority}"></span>${t.title}</div>`;
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  document.getElementById('tasks-body').innerHTML = html;
+}
+</script>
+</body>
+</html>
