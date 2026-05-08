@@ -658,7 +658,7 @@ function renderInvoices(pendingInvoices, bookings) {
       const status = i.status === 'sent'
         ? '<span class="badge badge-blue">Sent</span>'
         : '<span class="badge badge-yellow">Pending</span>';
-      html += `<div style="padding:0.5rem 0;border-bottom:1px solid #f8fafc">
+      html += `<div class="invoice-row" onclick="openInvoiceDetail('${i.id}')" style="padding:0.5rem 0;border-bottom:1px solid #f8fafc;cursor:pointer;transition:background 0.15s" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">
         <div style="font-size:0.875rem;display:flex;align-items:center;gap:0.5rem">
           <strong>${b ? b.dog_name : '?'}</strong> K${b ? b.kennel_number : '?'} ${status}
         </div>
@@ -668,10 +668,7 @@ function renderInvoices(pendingInvoices, bookings) {
           ${i.outside_window_pickup?' · <span class="badge badge-orange" style="font-size:0.65rem">Outside window</span>':''}
           ${i.grace_extension_applied?' · <span class="badge badge-blue" style="font-size:0.65rem">Grace ext.</span>':''}
         </div>
-        <div style="margin-top:0.4rem;display:flex;gap:0.4rem">
-          ${i.status==='pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}')">Mark Sent</button>` : ''}
-          <button class="btn btn-sm btn-success" onclick="markInvoicePaid('${i.id}')">Mark Paid</button>
-        </div>
+        <div style="font-size:0.72rem;color:#cbd5e1;margin-top:0.15rem">Tap for details</div>
       </div>`;
     });
   }
@@ -1000,6 +997,49 @@ async function markInvoicePaid(id) {
   if (error) { showToast('Error', 'error'); return; }
   showToast('Invoice marked paid');
   await loadAll();
+}
+
+function openInvoiceDetail(id) {
+  const i = _invoices.find(x => x.id === id);
+  if (!i) return;
+  const b = i.bookings;
+
+  const statusBadge = i.status === 'paid'
+    ? '<span class="badge badge-green">Paid</span>'
+    : i.status === 'sent'
+      ? '<span class="badge badge-blue">Sent</span>'
+      : '<span class="badge badge-yellow">Pending</span>';
+
+  const flag = (val, label, cls) => val
+    ? `<span class="badge ${cls}" style="margin-right:0.3rem">${label}</span>` : '';
+
+  const body = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem;font-size:0.875rem">
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Dog</div><strong>${b ? b.dog_name : '—'}</strong></div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Kennel</div><strong>K${b ? b.kennel_number : '—'}</strong></div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Check-in</div>${b ? fmtDate(b.check_in_date) + (b.check_in_time ? ' at ' + fmtTime(b.check_in_time) : '') : '—'}</div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Check-out</div>${b ? fmtDate(b.check_out_date) + (b.check_out_time ? ' at ' + fmtTime(b.check_out_time) : '') : '—'}</div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Days billed</div>${i.days_billed}</div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Weeks billed</div>${i.weeks_billed ?? '—'}</div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Invoice date</div>${fmtDate(i.invoice_date)}</div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Status</div>${statusBadge}</div>
+    </div>
+    ${(i.off_site_delivery || i.outside_window_pickup || i.grace_extension_applied) ? `
+    <div style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid #f1f5f9">
+      <div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.4rem">Extras / flags</div>
+      <div>
+        ${flag(i.off_site_delivery, 'Off-site delivery', 'badge-purple')}
+        ${flag(i.outside_window_pickup, 'Outside-window pickup', 'badge-orange')}
+        ${flag(i.grace_extension_applied, 'Grace extension', 'badge-blue')}
+      </div>
+      ${i.grace_extension_notes ? `<div style="font-size:0.8rem;color:#64748b;margin-top:0.4rem">${i.grace_extension_notes}</div>` : ''}
+    </div>` : ''}
+    <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+      ${i.status === 'pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}');closeModal()">Mark Sent</button>` : ''}
+      ${i.status !== 'paid' ? `<button class="btn btn-sm btn-success" onclick="markInvoicePaid('${i.id}');closeModal()">Mark Paid</button>` : ''}
+    </div>`;
+
+  openModal(`Invoice — ${b ? b.dog_name : 'Unknown'}`, body, null, null);
 }
 
 // ============================================================
