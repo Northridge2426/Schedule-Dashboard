@@ -194,6 +194,9 @@
     .sched-item:last-child { border-bottom: none; }
     .sched-item.past { opacity: 0.45; }
     .sched-item.past .sched-label { text-decoration: line-through; }
+    .sched-item.done { opacity: 0.5; }
+    .sched-item.done .sched-label { text-decoration: line-through; color: #94a3b8; }
+    .sched-cb { width: 1rem; height: 1rem; cursor: pointer; flex-shrink: 0; margin-top: 0.15rem; accent-color: #22c55e; }
     .sched-time { font-size: 0.75rem; color: #94a3b8; min-width: 52px; padding-top: 0.1rem; white-space: nowrap; }
     .sched-label { flex: 1; }
     .sched-optional { font-size: 0.78rem; color: #94a3b8; font-style: italic; }
@@ -341,6 +344,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // ============================================================
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
     _shopping = [], _invoices = [], _households = [];
+let _completions = new Set(); // task_keys completed today
 
 // ============================================================
 // AUTH
@@ -1199,6 +1203,8 @@ const ROUTINE_WEEKEND = [
   [null,    'Exercise (30 min)', false],
 ];
 
+function slugKey(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''); }
+
 async function renderSchedule() {
   const td       = todayStr();
   const tmr      = tomorrowStr();
@@ -1206,6 +1212,11 @@ async function renderSchedule() {
   const nowMins  = now.getHours() * 60 + now.getMinutes();
   const isWeekend = now.getDay() === 0 || now.getDay() === 6;
   const hasBoarded = _bookings.some(b => b.status === 'active');
+
+  // Load today's completions
+  const { data: compData } = await db.from('routine_completions')
+    .select('task_key').eq('completion_date', td);
+  _completions = new Set((compData || []).map(r => r.task_key));
 
   // Weather
   const w = await fetchWeather();
@@ -1235,14 +1246,20 @@ async function renderSchedule() {
     if (skipIfNoBoarding && !hasBoarded) return;
     const timeMins = time ? (parseInt(time) * 60 + parseInt(time.split(':')[1])) : null;
     const past     = timeMins !== null && nowMins > timeMins;
-    rHTML += `<div class="sched-item ${past ? 'past' : ''}">
+    const key      = 'routine_' + slugKey(label);
+    const done     = _completions.has(key);
+    rHTML += `<div class="sched-item ${done ? 'done' : past ? 'past' : ''}">
+      <input type="checkbox" class="sched-cb" ${done ? 'checked' : ''} onchange="toggleCompletion('${key}',this)">
       <div class="sched-time">${time ? fmtTime(time + ':00') : ''}</div>
       <div class="sched-label">${label}</div>
     </div>`;
   });
   // Scheduled cleanings for today
   _cleanings.filter(c => c.scheduled_date === td).forEach(c => {
-    rHTML += `<div class="sched-item">
+    const key  = 'cleaning_k' + c.kennel_number + '_today';
+    const done = _completions.has(key);
+    rHTML += `<div class="sched-item ${done ? 'done' : ''}">
+      <input type="checkbox" class="sched-cb" ${done ? 'checked' : ''} onchange="toggleCompletion('${key}',this)">
       <div class="sched-time">5:30pm</div>
       <div class="sched-label">🧹 Clean K${c.kennel_number} — ${c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)'}</div>
     </div>`;
@@ -1308,6 +1325,27 @@ async function renderSchedule() {
   if (!pinned.length) pinHTML += '<div class="empty">No reminders for today.</div>';
   pinned.forEach(r => { pinHTML += `<div class="sched-pin">• ${r.text}</div>`; });
   document.getElementById('sched-reminders').innerHTML = pinHTML + '</div>';
+}
+
+// ============================================================
+// ACTION: ROUTINE COMPLETION TOGGLE
+// ============================================================
+async function toggleCompletion(taskKey, el) {
+  const td = todayStr();
+  if (el.checked) {
+    const { error } = await db.from('routine_completions').insert({
+      task_key: taskKey, completion_date: td, completed_at: new Date().toISOString(),
+    });
+    if (error) { el.checked = false; showToast('Error saving', 'error'); return; }
+    _completions.add(taskKey);
+  } else {
+    const { error } = await db.from('routine_completions')
+      .delete().eq('task_key', taskKey).eq('completion_date', td);
+    if (error) { el.checked = true; showToast('Error saving', 'error'); return; }
+    _completions.delete(taskKey);
+  }
+  const row = el.closest('.sched-item');
+  if (row) row.classList.toggle('done', el.checked);
 }
 
 function openAddShopping() {
