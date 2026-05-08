@@ -22,7 +22,7 @@
 
     /* ---- Header ---- */
     header { background: #1e293b; color: white; padding: 0.875rem 1.5rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 10; }
-    header h1 { font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; }
+    header h1 { font-size: 1rem; font-weight: 600; }
     #logout-btn { background: none; border: 1px solid #475569; color: #94a3b8; padding: 0.3rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
     #logout-btn:hover { background: #334155; color: white; }
 
@@ -32,20 +32,39 @@
     @media (min-width: 1024px) { main { grid-template-columns: 1fr 1fr 1fr; } }
 
     /* ---- Cards ---- */
-    .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04); overflow: hidden; }
+    .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
     .card.full { grid-column: 1 / -1; }
     .card-header { padding: 0.875rem 1.25rem; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; }
-    .card-header h2 { font-size: 0.875rem; font-weight: 600; color: #1e293b; text-transform: uppercase; letter-spacing: 0.04em; }
+    .card-header h2 { font-size: 0.875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
     .card-body { padding: 1rem 1.25rem; }
+    .card-header-right { display: flex; align-items: center; gap: 0.5rem; }
 
     /* ---- Badges ---- */
     .badge { font-size: 0.7rem; font-weight: 600; padding: 0.2rem 0.55rem; border-radius: 99px; }
-    .badge-green { background: #dcfce7; color: #15803d; }
+    .badge-green  { background: #dcfce7; color: #15803d; }
     .badge-yellow { background: #fef9c3; color: #92400e; }
-    .badge-red { background: #fee2e2; color: #b91c1c; }
-    .badge-blue { background: #dbeafe; color: #1d4ed8; }
+    .badge-red    { background: #fee2e2; color: #b91c1c; }
+    .badge-blue   { background: #dbeafe; color: #1d4ed8; }
     .badge-purple { background: #f3e8ff; color: #7c3aed; }
-    .badge-gray { background: #f1f5f9; color: #64748b; }
+    .badge-gray   { background: #f1f5f9; color: #64748b; }
+    .badge-orange { background: #ffedd5; color: #c2410c; }
+
+    /* ---- Buttons ---- */
+    .btn { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 500; cursor: pointer; border: none; transition: background 0.15s; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn-primary   { background: #1e293b; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #334155; }
+    .btn-secondary { background: #f1f5f9; color: #475569; }
+    .btn-secondary:hover:not(:disabled) { background: #e2e8f0; }
+    .btn-success   { background: #dcfce7; color: #15803d; }
+    .btn-success:hover:not(:disabled) { background: #bbf7d0; }
+    .btn-danger    { background: #fee2e2; color: #b91c1c; }
+    .btn-danger:hover:not(:disabled) { background: #fecaca; }
+    .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 6px; }
+    .btn-icon { background: none; border: none; cursor: pointer; padding: 0.2rem 0.5rem; color: #94a3b8; border-radius: 5px; font-size: 0.9rem; line-height: 1; }
+    .btn-icon:hover { background: #f1f5f9; color: #475569; }
+    .btn-add { background: #f8fafc; border: 1.5px dashed #cbd5e1; color: #64748b; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; }
+    .btn-add:hover { border-color: #94a3b8; background: #f1f5f9; }
 
     /* ---- Capacity bar ---- */
     .cap-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
@@ -59,33 +78,36 @@
     /* ---- Kennel grid ---- */
     .kennel-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem; }
     @media (min-width: 480px) { .kennel-grid { grid-template-columns: repeat(10, 1fr); } }
-    .kennel-cell { border-radius: 8px; padding: 0.6rem 0.4rem; text-align: center; border: 2px solid transparent; }
-    .kennel-cell.active  { background: #dcfce7; border-color: #86efac; }
+    .kennel-cell { border-radius: 8px; padding: 0.6rem 0.4rem; text-align: center; border: 2px solid transparent; cursor: default; }
+    .kennel-cell.active  { background: #dcfce7; border-color: #86efac; cursor: pointer; }
+    .kennel-cell.active:hover { border-color: #4ade80; }
     .kennel-cell.pending { background: #fef9c3; border-color: #fde047; }
     .kennel-cell.empty   { background: #f8fafc; border-color: #e2e8f0; }
     .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
-    .k-dog  { font-size: 0.78rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
-    .k-date { font-size: 0.65rem; color: #94a3b8; margin-top: 0.2rem; }
+    .k-dog  { font-size: 0.75rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
+    .k-date { font-size: 0.62rem; color: #94a3b8; margin-top: 0.2rem; }
+    .k-action { font-size: 0.62rem; margin-top: 0.2rem; color: #15803d; font-weight: 500; }
     .kennel-cell.active  .k-dog { color: #15803d; }
     .kennel-cell.pending .k-dog { color: #92400e; }
     .kennel-cell.empty   .k-dog { color: #cbd5e1; }
 
-    /* ---- Today section ---- */
+    /* ---- Today ---- */
     .today-group { margin-bottom: 0.875rem; }
     .today-group:last-child { margin-bottom: 0; }
     .today-group-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.35rem; }
-    .today-row { font-size: 0.875rem; padding: 0.25rem 0; display: flex; align-items: baseline; gap: 0.4rem; }
-    .today-row .meta { font-size: 0.78rem; color: #94a3b8; }
+    .today-row { font-size: 0.875rem; padding: 0.3rem 0; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; border-bottom: 1px solid #f8fafc; }
+    .today-row:last-child { border-bottom: none; }
+    .today-row-left { display: flex; align-items: center; gap: 0.4rem; flex: 1; min-width: 0; }
+    .today-meta { font-size: 0.75rem; color: #94a3b8; }
 
     /* ---- Tables ---- */
     .tbl { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     .tbl th { text-align: left; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8; padding: 0.4rem 0.6rem; border-bottom: 1px solid #f1f5f9; }
     .tbl td { padding: 0.55rem 0.6rem; border-bottom: 1px solid #f8fafc; vertical-align: middle; }
     .tbl tr:last-child td { border-bottom: none; }
-    .tbl tr:hover td { background: #fafafa; }
 
     /* ---- Priority dots ---- */
-    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; flex-shrink: 0; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .p-urgent      { background: #ef4444; }
     .p-high        { background: #f97316; }
     .p-medium_high { background: #f59e0b; }
@@ -94,23 +116,58 @@
     .p-low         { background: #cbd5e1; }
     .p-none        { background: #e2e8f0; }
 
+    /* ---- Priority select ---- */
+    .priority-sel { font-size: 0.72rem; padding: 0.15rem 0.3rem; border: 1px solid #e2e8f0; border-radius: 5px; background: white; cursor: pointer; color: #475569; max-width: 80px; }
+    .priority-sel:focus { outline: none; border-color: #3b82f6; }
+
     /* ---- Task list ---- */
     .task-cols { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
     @media (min-width: 640px) { .task-cols { grid-template-columns: repeat(3, 1fr); } }
-    .task-col-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.5rem; }
-    .task-row { display: flex; align-items: baseline; gap: 0.35rem; padding: 0.3rem 0; border-bottom: 1px solid #f8fafc; font-size: 0.85rem; }
+    .task-col-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: space-between; }
+    .task-row { display: flex; align-items: center; gap: 0.35rem; padding: 0.32rem 0; border-bottom: 1px solid #f8fafc; }
     .task-row:last-child { border-bottom: none; }
+    .task-cb { width: 15px; height: 15px; cursor: pointer; accent-color: #22c55e; flex-shrink: 0; }
+    .task-title { font-size: 0.83rem; flex: 1; min-width: 0; }
 
     /* ---- Reminders ---- */
-    .reminder-row { display: flex; gap: 0.75rem; padding: 0.45rem 0; border-bottom: 1px solid #f8fafc; align-items: flex-start; }
+    .reminder-row { display: flex; gap: 0.5rem; padding: 0.45rem 0; border-bottom: 1px solid #f8fafc; align-items: flex-start; }
     .reminder-row:last-child { border-bottom: none; }
-    .reminder-date { font-size: 0.75rem; color: #94a3b8; white-space: nowrap; min-width: 60px; padding-top: 0.05rem; }
+    .reminder-date { font-size: 0.72rem; color: #94a3b8; white-space: nowrap; min-width: 56px; padding-top: 0.1rem; }
     .reminder-date.overdue { color: #ef4444; font-weight: 600; }
-    .reminder-text { font-size: 0.875rem; }
+    .reminder-text { font-size: 0.875rem; flex: 1; }
 
     /* ---- Shopping ---- */
-    .shop-row { font-size: 0.875rem; padding: 0.35rem 0; border-bottom: 1px solid #f8fafc; }
+    .shop-row { font-size: 0.875rem; padding: 0.35rem 0; border-bottom: 1px solid #f8fafc; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; cursor: pointer; }
+    .shop-row:hover .shop-item-name { text-decoration: underline; color: #64748b; }
     .shop-row:last-child { border-bottom: none; }
+
+    /* ---- Modal ---- */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 50; display: flex; align-items: flex-end; justify-content: center; padding: 0; }
+    @media (min-width: 480px) { .modal-overlay { align-items: center; padding: 1rem; } }
+    .modal-box { background: white; border-radius: 16px 16px 0 0; width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; box-shadow: 0 -4px 24px rgba(0,0,0,0.15); }
+    @media (min-width: 480px) { .modal-box { border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); } }
+    .modal-header { padding: 1rem 1.25rem 0.875rem; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: white; z-index: 1; }
+    .modal-header h3 { font-size: 1rem; font-weight: 600; }
+    .modal-body { padding: 1.25rem; }
+    .modal-footer { padding: 0.875rem 1.25rem; border-top: 1px solid #f1f5f9; display: flex; gap: 0.75rem; justify-content: flex-end; position: sticky; bottom: 0; background: white; }
+
+    /* ---- Form elements (in modal) ---- */
+    .form-field { margin-bottom: 1rem; }
+    .form-field:last-child { margin-bottom: 0; }
+    .form-field label { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .form-field input, .form-field select, .form-field textarea { width: 100%; padding: 0.6rem 0.75rem; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 0.9rem; outline: none; font-family: inherit; background: white; }
+    .form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.12); }
+    .form-field input[readonly], .form-field input:disabled { background: #f8fafc; color: #64748b; cursor: default; }
+    .form-check { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
+    .form-check input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6; flex-shrink: 0; }
+    .form-check label { font-size: 0.875rem; cursor: pointer; }
+    .form-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
+    .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+    /* ---- Toast ---- */
+    #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #1e293b; color: white; padding: 0.7rem 1.25rem; border-radius: 10px; font-size: 0.875rem; z-index: 100; opacity: 0; transition: opacity 0.2s; pointer-events: none; white-space: nowrap; }
+    #toast.show { opacity: 1; }
+    #toast.error { background: #b91c1c; }
 
     /* ---- Empty / loading ---- */
     .empty { font-size: 0.85rem; color: #cbd5e1; padding: 0.5rem 0; }
@@ -122,7 +179,9 @@
 </head>
 <body>
 
-<!-- LOGIN VIEW -->
+<!-- ======================================================
+     LOGIN
+     ====================================================== -->
 <div id="login-view">
   <h1>Fort Simpson Kennels</h1>
   <p>Schedule &amp; Kennel Dashboard</p>
@@ -131,7 +190,9 @@
   <div id="login-msg"></div>
 </div>
 
-<!-- DASHBOARD VIEW -->
+<!-- ======================================================
+     DASHBOARD
+     ====================================================== -->
 <div id="dashboard-view" style="display:none">
   <header>
     <h1>Fort Simpson Kennels</h1>
@@ -143,11 +204,14 @@
 
   <main>
 
-    <!-- Kennel Status (full width) -->
-    <div class="card full" id="card-kennels">
+    <!-- Kennel Status -->
+    <div class="card full">
       <div class="card-header">
         <h2>Kennel Status</h2>
-        <span id="cap-badge" class="badge badge-gray"></span>
+        <div class="card-header-right">
+          <span id="cap-badge" class="badge badge-gray"></span>
+          <button class="btn-add" onclick="openAddBooking()">+ Booking</button>
+        </div>
       </div>
       <div class="card-body">
         <div class="cap-row">
@@ -159,7 +223,7 @@
     </div>
 
     <!-- Today -->
-    <div class="card" id="card-today">
+    <div class="card">
       <div class="card-header">
         <h2>Today</h2>
         <span id="today-date-badge" class="badge badge-blue"></span>
@@ -168,7 +232,7 @@
     </div>
 
     <!-- Pending Cleanings -->
-    <div class="card" id="card-cleanings">
+    <div class="card">
       <div class="card-header">
         <h2>Pending Cleanings</h2>
         <span id="clean-count" class="badge badge-gray"></span>
@@ -176,26 +240,32 @@
       <div class="card-body" id="cleanings-body"><div class="loading">Loading…</div></div>
     </div>
 
-    <!-- Invoice Overview -->
-    <div class="card" id="card-invoices">
+    <!-- Invoices -->
+    <div class="card">
       <div class="card-header"><h2>Invoices</h2></div>
       <div class="card-body" id="invoices-body"><div class="loading">Loading…</div></div>
     </div>
 
     <!-- Reminders -->
-    <div class="card" id="card-reminders">
-      <div class="card-header"><h2>Reminders</h2></div>
+    <div class="card">
+      <div class="card-header">
+        <h2>Reminders</h2>
+        <button class="btn-add" onclick="openAddReminder()">+ Add</button>
+      </div>
       <div class="card-body" id="reminders-body"><div class="loading">Loading…</div></div>
     </div>
 
     <!-- Shopping -->
-    <div class="card" id="card-shopping">
-      <div class="card-header"><h2>Shopping — Local</h2></div>
+    <div class="card">
+      <div class="card-header">
+        <h2>Shopping — Local</h2>
+        <button class="btn-add" onclick="openAddShopping()">+ Add</button>
+      </div>
       <div class="card-body" id="shopping-body"><div class="loading">Loading…</div></div>
     </div>
 
-    <!-- Tasks & Projects (full width) -->
-    <div class="card full" id="card-tasks">
+    <!-- Tasks (full width) -->
+    <div class="card full">
       <div class="card-header"><h2>Tasks &amp; Projects</h2></div>
       <div class="card-body" id="tasks-body"><div class="loading">Loading…</div></div>
     </div>
@@ -203,17 +273,41 @@
   </main>
 </div>
 
+<!-- ======================================================
+     MODAL
+     ====================================================== -->
+<div id="modal-overlay" class="modal-overlay" style="display:none" onclick="handleOverlayClick(event)">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="modal-title"></h3>
+      <button class="btn-icon" onclick="closeModal()" style="font-size:1.3rem">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-save-btn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
 <script>
 const SUPABASE_URL  = 'https://blzxlqrueamcuxktdeaw.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsenhscXJ1ZWFtY3V4a3RkZWF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxNjI0ODQsImV4cCI6MjA5MzczODQ4NH0.-izfg5UIy5uWlSOX0Wz5op5v6HqwbckMmieP-N2sUmQ';
-
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // ============================================================
+// MODULE STATE
+// ============================================================
+let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
+    _shopping = [], _invoices = [], _households = [];
+
+// ============================================================
 // AUTH
 // ============================================================
-
 const $login = document.getElementById('login-view');
 const $dash  = document.getElementById('dashboard-view');
 
@@ -242,116 +336,177 @@ document.getElementById('logout-btn').addEventListener('click', () => db.auth.si
 // ============================================================
 // HELPERS
 // ============================================================
-
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const PRIORITY_LABELS = { urgent:'Urgent', high:'High', medium_high:'Med-High', medium:'Medium', medium_low:'Med-Low', low:'Low', none:'—' };
 
-function todayStr() { return new Date().toISOString().slice(0, 10); }
+function todayStr()    { return new Date().toISOString().slice(0, 10); }
+function tomorrowStr() { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); }
 
 function fmtDate(d) {
   if (!d) return '—';
   const [,m,day] = d.split('-');
   return `${MONTHS[+m-1]} ${+day}`;
 }
-
 function fmtTime(t) {
   if (!t) return null;
-  const [h, m] = t.split(':');
+  const [h,m] = t.split(':');
   const hr = +h;
-  return `${hr % 12 || 12}:${m}${hr >= 12 ? 'pm' : 'am'}`;
+  return `${hr%12||12}:${m}${hr>=12?'pm':'am'}`;
 }
-
 function todayFull() {
   const d = new Date();
   return `${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
+function nextWorkday(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate()+1);
+  return d.toISOString().slice(0,10);
+}
+function diffDays(d1, d2) {
+  return Math.round((new Date(d2) - new Date(d1)) / 86400000);
+}
 
-function tomorrowStr() {
-  const d = new Date(); d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+// ============================================================
+// MODAL
+// ============================================================
+let _modalSaveFn = null;
+
+function openModal(title, bodyHTML, onSave, saveLabel = 'Save') {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = bodyHTML;
+  const saveBtn = document.getElementById('modal-save-btn');
+  saveBtn.textContent = saveLabel;
+  saveBtn.style.display = onSave ? '' : 'none';
+  _modalSaveFn = onSave;
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+    try { await _modalSaveFn(); }
+    catch(e) { showToast(e.message || 'Error saving', 'error'); }
+    finally { saveBtn.disabled = false; saveBtn.textContent = saveLabel; }
+  };
+  document.getElementById('modal-overlay').style.display = 'flex';
+  // Focus first input if available
+  setTimeout(() => {
+    const first = document.querySelector('#modal-body input:not([readonly]):not([disabled]), #modal-body select, #modal-body textarea');
+    if (first) first.focus();
+  }, 50);
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').style.display = 'none';
+  _modalSaveFn = null;
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+let _toastTimer = null;
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show' + (type === 'error' ? ' error' : '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { t.className = ''; }, 2800);
 }
 
 // ============================================================
 // LOAD ALL
 // ============================================================
-
 async function loadAll() {
-  document.getElementById('today-chip').textContent        = todayFull();
-  document.getElementById('today-date-badge').textContent  = todayFull();
+  document.getElementById('today-chip').textContent       = todayFull();
+  document.getElementById('today-date-badge').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
-    db.from('cleanings').select('*').not('status', 'in', '("completed","skipped")').order('scheduled_date'),
-    db.from('tasks').select('*').eq('status', 'active'),
-    db.from('reminders').select('*').eq('status', 'active').order('target_date', { nullsFirst: false }),
-    db.from('shopping_items').select('*').eq('status', 'active').eq('list_name', 'local'),
-    db.from('invoices').select('*, bookings(dog_name, kennel_number, check_in_date, check_out_date)').neq('status', 'paid'),
+    db.from('cleanings').select('*').not('status','in','("completed","skipped")').order('scheduled_date'),
+    db.from('tasks').select('*').eq('status','active'),
+    db.from('reminders').select('*').eq('status','active').order('target_date', {nullsFirst: false}),
+    db.from('shopping_items').select('*').eq('status','active').eq('list_name','local'),
+    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time)').neq('status','paid'),
+    db.from('households').select('*').order('owner_name'),
   ]);
 
-  const bookings  = rBook.data  || [];
-  const cleanings = rClean.data || [];
-  const tasks     = rTask.data  || [];
-  const reminders = rRemind.data|| [];
-  const shopping  = rShop.data  || [];
-  const invoices  = rInv.data   || [];
+  _bookings   = rBook.data   || [];
+  _cleanings  = rClean.data  || [];
+  _tasks      = rTask.data   || [];
+  _reminders  = rRemind.data || [];
+  _shopping   = rShop.data   || [];
+  _invoices   = rInv.data    || [];
+  _households = rHouse.data  || [];
 
-  renderKennels(bookings);
-  renderToday(bookings, cleanings);
-  renderCleanings(cleanings);
-  renderInvoices(invoices, bookings);
-  renderReminders(reminders);
-  renderShopping(shopping);
-  renderTasks(tasks);
+  renderAll();
+}
+
+function renderAll() {
+  renderKennels(_bookings);
+  renderToday(_bookings, _cleanings);
+  renderCleanings(_cleanings);
+  renderInvoices(_invoices, _bookings);
+  renderReminders(_reminders);
+  renderShopping(_shopping);
+  renderTasks(_tasks);
 }
 
 // ============================================================
 // KENNEL STATUS
 // ============================================================
-
 function renderKennels(bookings) {
-  const td = todayStr();
-  const kennelMap = {};
+  // Group active bookings by kennel (supports shared kennels)
+  const activeByKennel  = {};
+  const pendingByKennel = {};
 
-  // Active stays occupy their kennel now
   bookings.filter(b => b.status === 'active').forEach(b => {
-    kennelMap[b.kennel_number] = { ...b, display: 'active' };
+    if (!activeByKennel[b.kennel_number]) activeByKennel[b.kennel_number] = [];
+    activeByKennel[b.kennel_number].push(b);
   });
-  // Pending future bookings show as yellow if kennel not already active
   bookings.filter(b => b.status === 'pending').forEach(b => {
-    if (!kennelMap[b.kennel_number]) kennelMap[b.kennel_number] = { ...b, display: 'pending' };
+    if (!activeByKennel[b.kennel_number]) {
+      if (!pendingByKennel[b.kennel_number]) pendingByKennel[b.kennel_number] = [];
+      pendingByKennel[b.kennel_number].push(b);
+    }
   });
 
-  const occupied = Object.keys(kennelMap).length;
-  const pct = (occupied / 10) * 100;
+  // Capacity = distinct kennels with active stays only
+  const occupied   = Object.keys(activeByKennel).length;
+  const pct        = (occupied / 10) * 100;
   const levelClass = occupied >= 5 ? 'high' : occupied >= 4 ? 'warn' : 'ok';
+
   document.getElementById('cap-fill').style.width = pct + '%';
   document.getElementById('cap-fill').className   = 'cap-fill ' + levelClass;
   document.getElementById('cap-text').textContent  = `${occupied} / 10 kennels occupied`;
 
   const badge = document.getElementById('cap-badge');
-  if (occupied >= 5) {
-    badge.textContent = '⚠ Over 40% capacity';
-    badge.className   = 'badge badge-red';
-  } else {
-    badge.textContent = occupied + ' occupied';
-    badge.className   = 'badge badge-gray';
-  }
+  if (occupied >= 5) { badge.textContent = '⚠ Over 40%'; badge.className = 'badge badge-red'; }
+  else               { badge.textContent = occupied + ' occupied'; badge.className = 'badge badge-gray'; }
 
   const grid = document.getElementById('kennel-grid');
   grid.innerHTML = '';
   for (let k = 1; k <= 10; k++) {
-    const b    = kennelMap[k];
+    const entries  = activeByKennel[k] || pendingByKennel[k] || null;
+    const display  = activeByKennel[k] ? 'active' : pendingByKennel[k] ? 'pending' : 'empty';
+    const dogNames = entries ? entries.map(b => b.dog_name).join('+') : '—';
+    const rep      = entries ? entries[0] : null;
+    const dateLabel= rep ? (display === 'active' ? 'Out ' + fmtDate(rep.check_out_date) : 'In ' + fmtDate(rep.check_in_date)) : '';
+    const actionLabel = display === 'active' ? 'tap to check out' : '';
+
     const cell = document.createElement('div');
-    cell.className = 'kennel-cell ' + (b ? b.display : 'empty');
-    const dateLabel = b
-      ? (b.display === 'active'
-          ? 'Out ' + fmtDate(b.check_out_date)
-          : 'In '  + fmtDate(b.check_in_date))
-      : '';
-    cell.innerHTML = `
-      <div class="k-num">K${k}</div>
-      <div class="k-dog">${b ? b.dog_name : '—'}</div>
-      <div class="k-date">${dateLabel}</div>`;
+    cell.className = 'kennel-cell ' + display;
+    cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogNames}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
+
+    if (display === 'active') {
+      cell.onclick = () => {
+        // If multiple dogs in kennel, check out the first active one (user can repeat for second)
+        const booking = activeByKennel[k][0];
+        openLogCheckout(booking);
+      };
+    }
     grid.appendChild(cell);
   }
 }
@@ -359,13 +514,12 @@ function renderKennels(bookings) {
 // ============================================================
 // TODAY
 // ============================================================
-
 function renderToday(bookings, cleanings) {
   const td  = todayStr();
   const tmr = tomorrowStr();
 
   const checkouts    = bookings.filter(b => b.check_out_date === td  && b.status === 'active');
-  const checkins     = bookings.filter(b => b.check_in_date  === td  && (b.status === 'pending' || b.status === 'active'));
+  const checkins     = bookings.filter(b => b.check_in_date  === td  && b.status === 'pending');
   const tmrCheckouts = bookings.filter(b => b.check_out_date === tmr && b.status === 'active');
   const tmrCheckins  = bookings.filter(b => b.check_in_date  === tmr && b.status === 'pending');
   const todayClean   = cleanings.filter(c => c.scheduled_date === td);
@@ -377,7 +531,11 @@ function renderToday(bookings, cleanings) {
     checkouts.forEach(b => {
       const time    = b.check_out_time ? fmtTime(b.check_out_time) : 'time TBD';
       const offsite = b.notes && b.notes.toLowerCase().includes('off-site') ? ' <span class="badge badge-purple">Off-site</span>' : '';
-      h += `<div class="today-row">🔴 <strong>${b.dog_name}</strong> — K${b.kennel_number} <span class="meta">${time}${offsite}</span></div>`;
+      h += `<div class="today-row">
+        <div class="today-row-left">🔴 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${time}${offsite}</span>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Check out</button>
+      </div>`;
     });
     h += '</div>';
     parts.push(h);
@@ -387,7 +545,10 @@ function renderToday(bookings, cleanings) {
     let h = '<div class="today-group"><div class="today-group-label">Check-ins</div>';
     checkins.forEach(b => {
       const time = b.check_in_time ? fmtTime(b.check_in_time) : 'time TBD';
-      h += `<div class="today-row">🟢 <strong>${b.dog_name}</strong> — K${b.kennel_number} <span class="meta">${time}</span></div>`;
+      h += `<div class="today-row">
+        <div class="today-row-left">🟢 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${time}</span></div>
+        <button class="btn btn-sm btn-success" onclick="openLogCheckin(${JSON.stringify(b).split('"').join("'")})">Check in</button>
+      </div>`;
     });
     h += '</div>';
     parts.push(h);
@@ -397,7 +558,10 @@ function renderToday(bookings, cleanings) {
     let h = '<div class="today-group"><div class="today-group-label">Cleanings</div>';
     todayClean.forEach(c => {
       const label = c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)';
-      h += `<div class="today-row">🧹 K${c.kennel_number} — <span class="meta">${label}</span></div>`;
+      h += `<div class="today-row">
+        <div class="today-row-left">🧹 K${c.kennel_number} <span class="today-meta">${label}</span></div>
+        <button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button>
+      </div>`;
     });
     h += '</div>';
     parts.push(h);
@@ -405,12 +569,8 @@ function renderToday(bookings, cleanings) {
 
   if (tmrCheckouts.length || tmrCheckins.length) {
     let h = '<div class="today-group"><div class="today-group-label">Tomorrow</div>';
-    tmrCheckouts.forEach(b => {
-      h += `<div class="today-row" style="color:#94a3b8">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div>`;
-    });
-    tmrCheckins.forEach(b => {
-      h += `<div class="today-row" style="color:#94a3b8">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div>`;
-    });
+    tmrCheckouts.forEach(b => { h += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div></div>`; });
+    tmrCheckins.forEach(b  => { h += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div></div>`; });
     h += '</div>';
     parts.push(h);
   }
@@ -423,7 +583,6 @@ function renderToday(bookings, cleanings) {
 // ============================================================
 // CLEANINGS
 // ============================================================
-
 function renderCleanings(cleanings) {
   document.getElementById('clean-count').textContent = cleanings.length;
   if (!cleanings.length) {
@@ -431,20 +590,17 @@ function renderCleanings(cleanings) {
     return;
   }
   const td = todayStr();
-  let html = '<table class="tbl"><thead><tr><th>Kennel</th><th>Type</th><th>Date</th><th>Reason</th></tr></thead><tbody>';
+  let html = '<table class="tbl"><thead><tr><th>K</th><th>Type</th><th>Date</th><th>Reason</th><th></th></tr></thead><tbody>';
   cleanings.forEach(c => {
-    const overdue = c.scheduled_date && c.scheduled_date < td;
-    const dateCell = c.scheduled_date
-      ? `<span style="color:${overdue ? '#ef4444' : 'inherit'}">${fmtDate(c.scheduled_date)}${overdue ? ' ⚠' : ''}</span>`
-      : '—';
-    const typeLabel = c.type === 'quick_refresh'
-      ? '<span class="badge badge-blue">Quick</span>'
-      : '<span class="badge badge-gray">Full</span>';
+    const overdue   = c.scheduled_date && c.scheduled_date < td;
+    const dateCell  = c.scheduled_date ? `<span style="color:${overdue?'#ef4444':'inherit'}">${fmtDate(c.scheduled_date)}${overdue?' ⚠':''}</span>` : '—';
+    const typeLabel = c.type === 'quick_refresh' ? '<span class="badge badge-blue">Quick</span>' : '<span class="badge badge-gray">Full</span>';
     html += `<tr>
       <td><strong>K${c.kennel_number}</strong></td>
       <td>${typeLabel}</td>
       <td>${dateCell}</td>
-      <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}</td>
+      <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}${c.notes ? '<br><em>' + c.notes + '</em>' : ''}</td>
+      <td><button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button></td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -454,37 +610,38 @@ function renderCleanings(cleanings) {
 // ============================================================
 // INVOICES
 // ============================================================
-
 function renderInvoices(pendingInvoices, bookings) {
-  // Also surface completed bookings with no invoice yet
-  const invoicedBookingIds = pendingInvoices.map(i => i.booking_id);
-  const needInvoice = bookings.filter(b =>
-    b.status === 'completed' && !invoicedBookingIds.includes(b.id)
-  );
-
+  const invoicedIds     = pendingInvoices.map(i => i.booking_id);
+  const needInvoice     = bookings.filter(b => b.status === 'completed' && !invoicedIds.includes(b.id));
   let html = '';
 
   if (pendingInvoices.length) {
-    html += '<div style="margin-bottom:0.875rem">';
     pendingInvoices.forEach(i => {
-      const b = i.bookings;
-      const statusBadge = i.status === 'sent'
+      const b      = i.bookings;
+      const status = i.status === 'sent'
         ? '<span class="badge badge-blue">Sent</span>'
         : '<span class="badge badge-yellow">Pending</span>';
-      html += `<div style="padding:0.45rem 0;border-bottom:1px solid #f8fafc">
+      html += `<div style="padding:0.5rem 0;border-bottom:1px solid #f8fafc">
         <div style="font-size:0.875rem;display:flex;align-items:center;gap:0.5rem">
-          <strong>${b ? b.dog_name : '?'}</strong> — K${b ? b.kennel_number : '?'} ${statusBadge}
+          <strong>${b ? b.dog_name : '?'}</strong> K${b ? b.kennel_number : '?'} ${status}
         </div>
         <div style="font-size:0.78rem;color:#94a3b8;margin-top:0.2rem">
-          ${i.days_billed} day${i.days_billed !== 1 ? 's' : ''}${i.weeks_billed ? ` (${i.weeks_billed} wk)` : ''} · Invoice ${fmtDate(i.invoice_date)}
+          ${i.days_billed} day${i.days_billed!==1?'s':''}${i.weeks_billed?` (${i.weeks_billed} wk)`:''} · Invoice ${fmtDate(i.invoice_date)}
+          ${i.off_site_delivery?' · <span class="badge badge-purple" style="font-size:0.65rem">Off-site</span>':''}
+          ${i.outside_window_pickup?' · <span class="badge badge-orange" style="font-size:0.65rem">Outside window</span>':''}
+          ${i.grace_extension_applied?' · <span class="badge badge-blue" style="font-size:0.65rem">Grace ext.</span>':''}
+        </div>
+        <div style="margin-top:0.4rem;display:flex;gap:0.4rem">
+          ${i.status==='pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}')">Mark Sent</button>` : ''}
+          <button class="btn btn-sm btn-success" onclick="markInvoicePaid('${i.id}')">Mark Paid</button>
         </div>
       </div>`;
     });
-    html += '</div>';
   }
 
   if (needInvoice.length) {
-    html += '<div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#94a3b8;margin-bottom:0.35rem">Awaiting Invoice</div>';
+    if (html) html += '<div style="height:0.5rem"></div>';
+    html += `<div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#94a3b8;margin-bottom:0.35rem">Awaiting Invoice</div>`;
     needInvoice.forEach(b => {
       html += `<div style="font-size:0.875rem;color:#94a3b8;padding:0.25rem 0">${b.dog_name} — K${b.kennel_number} (out ${fmtDate(b.check_out_date)})</div>`;
     });
@@ -496,7 +653,6 @@ function renderInvoices(pendingInvoices, bookings) {
 // ============================================================
 // REMINDERS
 // ============================================================
-
 function renderReminders(reminders) {
   if (!reminders.length) {
     document.getElementById('reminders-body').innerHTML = '<div class="empty">No active reminders.</div>';
@@ -507,9 +663,13 @@ function renderReminders(reminders) {
   reminders.forEach(r => {
     const overdue = r.target_date && r.target_date < td;
     const datePart = r.target_date
-      ? `<span class="reminder-date ${overdue ? 'overdue' : ''}">${fmtDate(r.target_date)}</span>`
-      : `<span class="reminder-date">📌 ongoing</span>`;
-    html += `<div class="reminder-row">${datePart}<div class="reminder-text">${r.text}</div></div>`;
+      ? `<div class="reminder-date ${overdue?'overdue':''}">${fmtDate(r.target_date)}</div>`
+      : `<div class="reminder-date">📌</div>`;
+    html += `<div class="reminder-row">
+      ${datePart}
+      <div class="reminder-text">${r.text}</div>
+      <button class="btn-icon" title="Dismiss" onclick="dismissReminder('${r.id}')">×</button>
+    </div>`;
   });
   document.getElementById('reminders-body').innerHTML = html;
 }
@@ -517,46 +677,392 @@ function renderReminders(reminders) {
 // ============================================================
 // SHOPPING
 // ============================================================
-
 function renderShopping(items) {
-  document.getElementById('shopping-body').innerHTML = items.length
-    ? items.map(i => `<div class="shop-row">${i.item}</div>`).join('')
-    : '<div class="empty">Local list is empty.</div>';
+  if (!items.length) {
+    document.getElementById('shopping-body').innerHTML = '<div class="empty">Local list is empty.</div>';
+    return;
+  }
+  document.getElementById('shopping-body').innerHTML = items.map(i =>
+    `<div class="shop-row" onclick="purchaseShopping('${i.id}','${i.item.replace(/'/g,'&#39;')}')">
+      <span class="shop-item-name">${i.item}</span>
+      <span style="font-size:0.75rem;color:#cbd5e1">tap to purchase</span>
+    </div>`
+  ).join('');
 }
 
 // ============================================================
 // TASKS
 // ============================================================
-
-const PRIORITY_LABEL = {
-  urgent: 'Urgent', high: 'High', medium_high: 'Med-High',
-  medium: 'Medium', medium_low: 'Med-Low', low: 'Low', none: '—'
-};
-
 function renderTasks(tasks) {
-  const groups = {
-    task:           { label: 'Task List',       items: [] },
-    project:        { label: 'Projects',         items: [] },
-    office_project: { label: 'Office Projects',  items: [] },
-  };
-
   const PORDER = ['urgent','high','medium_high','medium','medium_low','low','none'];
+  const groups = {
+    task:           { label: 'Task List',      items: [] },
+    project:        { label: 'Projects',        items: [] },
+    office_project: { label: 'Office Projects', items: [] },
+  };
   tasks.forEach(t => { if (groups[t.category]) groups[t.category].items.push(t); });
-  Object.values(groups).forEach(g => {
-    g.items.sort((a, b) => PORDER.indexOf(a.priority) - PORDER.indexOf(b.priority));
-  });
+  Object.values(groups).forEach(g => { g.items.sort((a,b) => PORDER.indexOf(a.priority) - PORDER.indexOf(b.priority)); });
+
+  const priorityOptions = Object.entries(PRIORITY_LABELS).map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
 
   let html = '<div class="task-cols">';
-  for (const [, g] of Object.entries(groups)) {
-    html += `<div><div class="task-col-title">${g.label}</div>`;
+  for (const [cat, g] of Object.entries(groups)) {
+    html += `<div>
+      <div class="task-col-title">
+        ${g.label}
+        <button class="btn-add" onclick="openAddTask('${cat}')">+ Add</button>
+      </div>`;
     if (!g.items.length) { html += '<div class="empty">Empty</div>'; }
     else g.items.forEach(t => {
-      html += `<div class="task-row"><span class="dot p-${t.priority}"></span>${t.title}</div>`;
+      const selOptions = Object.entries(PRIORITY_LABELS).map(([v,l]) =>
+        `<option value="${v}" ${t.priority===v?'selected':''}>${l}</option>`
+      ).join('');
+      html += `<div class="task-row">
+        <input type="checkbox" class="task-cb" title="Mark complete" onchange="completeTask('${t.id}',this)">
+        <span class="dot p-${t.priority}"></span>
+        <span class="task-title">${t.title}</span>
+        <select class="priority-sel" onchange="changeTaskPriority('${t.id}',this.value)">${selOptions}</select>
+      </div>`;
     });
     html += '</div>';
   }
   html += '</div>';
   document.getElementById('tasks-body').innerHTML = html;
+}
+
+// ============================================================
+// ACTION: LOG CHECKOUT
+// ============================================================
+function openLogCheckout(booking) {
+  // booking may come from JSON.stringify → need to handle both object and string forms
+  if (typeof booking === 'string') {
+    try { booking = JSON.parse(booking.replace(/'/g, '"')); } catch(e) {}
+  }
+  // Find fresh copy from module state
+  const b = _bookings.find(x => x.id === booking.id) || booking;
+
+  const body = `
+    <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
+    <div class="form-field"><label>Check-in</label><input readonly value="${fmtDate(b.check_in_date)}${b.check_in_time ? ' at ' + fmtTime(b.check_in_time) : ' (time unknown)'}"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Check-out date</label><input type="date" id="f-out-date" value="${b.check_out_date || todayStr()}"></div>
+      <div class="form-field"><label>Check-out time *</label><input type="time" id="f-out-time" value="${b.check_out_time || ''}"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-offsite" ${b.notes&&b.notes.includes('off-site')?'checked':''}><label for="f-offsite">Off-site delivery</label></div>
+      <div class="form-check"><input type="checkbox" id="f-outside"><label for="f-outside">Outside-window pickup</label></div>
+      <div class="form-check"><input type="checkbox" id="f-grace" onchange="toggleGraceNotes(this)"><label for="f-grace">Grace extension applied</label></div>
+    </div>
+    <div class="form-field" id="f-grace-notes-field" style="display:none">
+      <label>Grace extension notes</label>
+      <input type="text" id="f-grace-notes" placeholder="e.g. Extended to 19:30">
+    </div>`;
+
+  openModal('Log Check-Out: ' + b.dog_name, body, async () => {
+    const outDate  = document.getElementById('f-out-date').value;
+    const outTime  = document.getElementById('f-out-time').value;
+    const offsite  = document.getElementById('f-offsite').checked;
+    const outside  = document.getElementById('f-outside').checked;
+    const grace    = document.getElementById('f-grace').checked;
+    const graceNotes = document.getElementById('f-grace-notes')?.value || '';
+
+    if (!outTime) throw new Error('Check-out time is required');
+
+    // Calculate billing
+    const checkIn  = b.check_in_date;
+    const days     = Math.max(1, diffDays(checkIn, outDate));
+    const weeks    = days >= 7 ? Math.floor(days / 7) : null;
+    const invDate  = nextWorkday(outDate);
+
+    // Update booking to completed
+    const { error: bookErr } = await db.from('bookings').update({
+      check_out_date: outDate,
+      check_out_time: outTime,
+      status: 'completed',
+      updated_at: new Date().toISOString(),
+    }).eq('id', b.id);
+    if (bookErr) throw bookErr;
+
+    // Create invoice
+    const { error: invErr } = await db.from('invoices').insert({
+      booking_id: b.id,
+      days_billed: days,
+      weeks_billed: weeks,
+      off_site_delivery: offsite,
+      outside_window_pickup: outside,
+      grace_extension_applied: grace,
+      grace_extension_notes: graceNotes || null,
+      invoice_date: invDate,
+      status: 'pending',
+    });
+    if (invErr) throw invErr;
+
+    closeModal();
+    showToast(`${b.dog_name} checked out · Invoice due ${fmtDate(invDate)}`);
+    await loadAll();
+  }, 'Confirm Check-Out');
+}
+
+function toggleGraceNotes(cb) {
+  document.getElementById('f-grace-notes-field').style.display = cb.checked ? '' : 'none';
+}
+
+// ============================================================
+// ACTION: LOG CHECK-IN
+// ============================================================
+function openLogCheckin(booking) {
+  if (typeof booking === 'string') {
+    try { booking = JSON.parse(booking.replace(/'/g, '"')); } catch(e) {}
+  }
+  const b = _bookings.find(x => x.id === booking.id) || booking;
+
+  const body = `
+    <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || todayStr()}"></div>
+      <div class="form-field"><label>Check-in time *</label><input type="time" id="f-in-time" value="${b.check_in_time || ''}"></div>
+    </div>`;
+
+  openModal('Log Check-In: ' + b.dog_name, body, async () => {
+    const inDate = document.getElementById('f-in-date').value;
+    const inTime = document.getElementById('f-in-time').value;
+    if (!inTime) throw new Error('Check-in time is required');
+
+    const { error } = await db.from('bookings').update({
+      check_in_date: inDate,
+      check_in_time: inTime,
+      status: 'active',
+      updated_at: new Date().toISOString(),
+    }).eq('id', b.id);
+    if (error) throw error;
+
+    closeModal();
+    showToast(`${b.dog_name} checked in to K${b.kennel_number}`);
+    await loadAll();
+  }, 'Confirm Check-In');
+}
+
+// ============================================================
+// ACTION: ADD BOOKING
+// ============================================================
+function openAddBooking() {
+  const householdOptions = _households.map(h =>
+    `<option value="${h.id}">${h.owner_name}</option>`
+  ).join('');
+
+  const body = `
+    <div class="form-field"><label>Dog name *</label><input type="text" id="f-dog" placeholder="e.g. Buddy"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Kennel *</label>
+        <select id="f-kennel">
+          ${[...Array(10)].map((_,i) => `<option value="${i+1}">K${i+1}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field"><label>Owner</label>
+        <select id="f-household" onchange="toggleNewOwner(this)">
+          <option value="">Unknown / TBD</option>
+          ${householdOptions}
+          <option value="new">+ New owner</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-field" id="f-new-owner-field" style="display:none">
+      <label>New owner name *</label><input type="text" id="f-new-owner" placeholder="Owner's name">
+    </div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Check-in date *</label><input type="date" id="f-cin-date"></div>
+      <div class="form-field"><label>Check-in time</label><input type="time" id="f-cin-time"></div>
+    </div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Check-out date *</label><input type="date" id="f-cout-date"></div>
+      <div class="form-field"><label>Check-out time</label><input type="time" id="f-cout-time"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-shared"><label for="f-shared">⚠ Shared kennel — owner insists (rare exception)</label></div>
+    </div>
+    <div class="form-field"><label>Notes</label><textarea id="f-notes" rows="2" placeholder="Optional"></textarea></div>`;
+
+  openModal('Add Booking', body, async () => {
+    const dogName  = document.getElementById('f-dog').value.trim();
+    const kennel   = parseInt(document.getElementById('f-kennel').value);
+    const cinDate  = document.getElementById('f-cin-date').value;
+    const cinTime  = document.getElementById('f-cin-time').value || null;
+    const coutDate = document.getElementById('f-cout-date').value;
+    const coutTime = document.getElementById('f-cout-time').value || null;
+    const shared   = document.getElementById('f-shared').checked;
+    const notes    = document.getElementById('f-notes').value.trim() || null;
+    const houseVal = document.getElementById('f-household').value;
+
+    if (!dogName) throw new Error('Dog name is required');
+    if (!cinDate || !coutDate) throw new Error('Check-in and check-out dates are required');
+
+    let householdId = houseVal && houseVal !== 'new' ? houseVal : null;
+
+    if (houseVal === 'new') {
+      const ownerName = document.getElementById('f-new-owner').value.trim();
+      if (!ownerName) throw new Error('Owner name is required when adding new owner');
+      const { data: h, error: hErr } = await db.from('households').insert({ owner_name: ownerName }).select().single();
+      if (hErr) throw hErr;
+      householdId = h.id;
+    }
+
+    const notesFull = [
+      shared ? '⚠ Shared kennel — owner insists. Rare exception logged.' : null,
+      notes
+    ].filter(Boolean).join(' ') || null;
+
+    const { error } = await db.from('bookings').insert({
+      dog_name: dogName,
+      kennel_number: kennel,
+      check_in_date: cinDate,
+      check_in_time: cinTime,
+      check_out_date: coutDate,
+      check_out_time: coutTime,
+      status: 'pending',
+      household_id: householdId,
+      notes: notesFull,
+    });
+    if (error) throw error;
+
+    closeModal();
+    showToast(`Booking added: ${dogName} → K${kennel}`);
+    await loadAll();
+  });
+}
+
+function toggleNewOwner(sel) {
+  document.getElementById('f-new-owner-field').style.display = sel.value === 'new' ? '' : 'none';
+}
+
+// ============================================================
+// ACTION: MARK CLEANING DONE
+// ============================================================
+async function markCleaningDone(id, kennelNum) {
+  if (!confirm(`Mark K${kennelNum} cleaning as complete?`)) return;
+  const { error } = await db.from('cleanings').update({
+    status: 'completed',
+    completed_date: todayStr(),
+  }).eq('id', id);
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  showToast(`K${kennelNum} cleaning marked complete`);
+  await loadAll();
+}
+
+// ============================================================
+// ACTION: INVOICE STATUS
+// ============================================================
+async function markInvoiceSent(id) {
+  const { error } = await db.from('invoices').update({ status: 'sent' }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast('Invoice marked sent');
+  await loadAll();
+}
+
+async function markInvoicePaid(id) {
+  const { error } = await db.from('invoices').update({ status: 'paid', paid_date: todayStr() }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast('Invoice marked paid');
+  await loadAll();
+}
+
+// ============================================================
+// ACTION: REMINDERS
+// ============================================================
+function openAddReminder() {
+  const body = `
+    <div class="form-field"><label>Reminder *</label><textarea id="f-reminder-text" rows="2" placeholder="What do you need to remember?"></textarea></div>
+    <div class="form-field"><label>Target date (optional)</label><input type="date" id="f-reminder-date"></div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-persistent"><label for="f-persistent">📌 Persistent — keep until manually cleared</label></div>
+      <div class="form-hint">Leave unchecked for day-of only (shows on the date, then disappears)</div>
+    </div>`;
+
+  openModal('Add Reminder', body, async () => {
+    const text       = document.getElementById('f-reminder-text').value.trim();
+    const targetDate = document.getElementById('f-reminder-date').value || null;
+    const persistent = document.getElementById('f-persistent').checked;
+    if (!text) throw new Error('Reminder text is required');
+
+    const { error } = await db.from('reminders').insert({ text, target_date: targetDate, persistent, status: 'active' });
+    if (error) throw error;
+    closeModal();
+    showToast('Reminder added');
+    await loadAll();
+  });
+}
+
+async function dismissReminder(id) {
+  const { error } = await db.from('reminders').update({ status: 'dismissed' }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast('Reminder dismissed');
+  await loadAll();
+}
+
+// ============================================================
+// ACTION: TASKS
+// ============================================================
+async function completeTask(id, cb) {
+  cb.disabled = true;
+  const { error } = await db.from('tasks').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', id);
+  if (error) { showToast('Error', 'error'); cb.disabled = false; cb.checked = false; return; }
+  showToast('Task completed ✓');
+  await loadAll();
+}
+
+async function changeTaskPriority(id, priority) {
+  const { error } = await db.from('tasks').update({ priority }).eq('id', id);
+  if (error) { showToast('Error updating priority', 'error'); return; }
+  // Silently re-render without toast (inline change)
+  const { data } = await db.from('tasks').select('*').eq('status','active');
+  _tasks = data || [];
+  renderTasks(_tasks);
+}
+
+function openAddTask(category) {
+  const catLabels = { task: 'Task', project: 'Project', office_project: 'Office Project' };
+  const priorityOptions = Object.entries(PRIORITY_LABELS).map(([v,l]) =>
+    `<option value="${v}" ${v==='medium'?'selected':''}>${l}</option>`
+  ).join('');
+
+  const body = `
+    <div class="form-field"><label>Title *</label><input type="text" id="f-task-title" placeholder="What needs to be done?"></div>
+    <div class="form-field"><label>Priority</label><select id="f-task-priority">${priorityOptions}</select></div>`;
+
+  openModal('Add ' + catLabels[category], body, async () => {
+    const title    = document.getElementById('f-task-title').value.trim();
+    const priority = document.getElementById('f-task-priority').value;
+    if (!title) throw new Error('Title is required');
+
+    const { error } = await db.from('tasks').insert({ title, category, priority, status: 'active' });
+    if (error) throw error;
+    closeModal();
+    showToast('Added: ' + title);
+    await loadAll();
+  });
+}
+
+// ============================================================
+// ACTION: SHOPPING
+// ============================================================
+async function purchaseShopping(id, item) {
+  if (!confirm(`Mark "${item}" as purchased?`)) return;
+  const { error } = await db.from('shopping_items').update({ status: 'purchased' }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast(`"${item}" marked purchased`);
+  await loadAll();
+}
+
+function openAddShopping() {
+  const body = `<div class="form-field"><label>Item *</label><input type="text" id="f-shop-item" placeholder="e.g. Chicken breast"></div>`;
+  openModal('Add to Local List', body, async () => {
+    const item = document.getElementById('f-shop-item').value.trim();
+    if (!item) throw new Error('Item name is required');
+    const { error } = await db.from('shopping_items').insert({ list_name: 'local', item, status: 'active' });
+    if (error) throw error;
+    closeModal();
+    showToast('Added: ' + item);
+    await loadAll();
+  });
 }
 </script>
 </body>
