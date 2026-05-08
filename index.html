@@ -175,6 +175,29 @@
 
     /* ---- Date chip ---- */
     #today-chip { font-size: 0.8rem; color: #94a3b8; }
+
+    /* ---- Tabs ---- */
+    .tab-bar { background: #1e293b; border-top: 1px solid #334155; display: flex; }
+    .tab-btn { flex: 1; padding: 0.55rem 0; background: none; border: none; color: #94a3b8; font-size: 0.85rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.15s; }
+    .tab-btn.active { color: white; border-bottom-color: #3b82f6; }
+    .tab-btn:hover:not(.active) { color: #cbd5e1; }
+
+    /* ---- Schedule view ---- */
+    #schedule-view { max-width: 680px; margin: 0 auto; padding: 1.25rem; }
+    .sched-weather { background: white; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.07); display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+    .sched-weather-main { font-size: 1.5rem; font-weight: 700; }
+    .sched-weather-desc { font-size: 0.875rem; color: #64748b; }
+    .sched-weather-details { font-size: 0.8rem; color: #94a3b8; display: flex; gap: 1rem; flex-wrap: wrap; }
+    .sched-card { background: white; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.07); }
+    .sched-card-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.75rem; }
+    .sched-item { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.35rem 0; border-bottom: 1px solid #f8fafc; font-size: 0.875rem; }
+    .sched-item:last-child { border-bottom: none; }
+    .sched-item.past { opacity: 0.45; }
+    .sched-item.past .sched-label { text-decoration: line-through; }
+    .sched-time { font-size: 0.75rem; color: #94a3b8; min-width: 52px; padding-top: 0.1rem; white-space: nowrap; }
+    .sched-label { flex: 1; }
+    .sched-optional { font-size: 0.78rem; color: #94a3b8; font-style: italic; }
+    .sched-pin { font-size: 0.75rem; color: #64748b; padding: 0.3rem 0; display: flex; gap: 0.5rem; }
   </style>
 </head>
 <body>
@@ -201,8 +224,22 @@
       <button id="logout-btn">Sign out</button>
     </div>
   </header>
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab-overview" onclick="switchTab('overview')">Overview</button>
+    <button class="tab-btn" id="tab-schedule" onclick="switchTab('schedule')">Today's Schedule</button>
+  </div>
 
-  <main>
+  <!-- SCHEDULE VIEW -->
+  <div id="schedule-view" style="display:none">
+    <div id="sched-weather"><div class="loading">Fetching weather…</div></div>
+    <div id="sched-routine"></div>
+    <div id="sched-kennel-out"></div>
+    <div id="sched-kennel-in"></div>
+    <div id="sched-kennel-tmr"></div>
+    <div id="sched-reminders"></div>
+  </div>
+
+  <main id="overview-view">
 
     <!-- Kennel Status -->
     <div class="card full">
@@ -1050,6 +1087,187 @@ async function purchaseShopping(id, item) {
   if (error) { showToast('Error', 'error'); return; }
   showToast(`"${item}" marked purchased`);
   await loadAll();
+}
+
+// ============================================================
+// TABS
+// ============================================================
+function switchTab(tab) {
+  document.getElementById('overview-view').style.display = tab === 'overview' ? '' : 'none';
+  document.getElementById('schedule-view').style.display = tab === 'schedule' ? '' : 'none';
+  document.getElementById('tab-overview').classList.toggle('active', tab === 'overview');
+  document.getElementById('tab-schedule').classList.toggle('active', tab === 'schedule');
+  if (tab === 'schedule') renderSchedule();
+}
+
+// ============================================================
+// P3: SCHEDULE VIEW
+// ============================================================
+const FS_LAT = 61.862, FS_LON = -121.235;
+
+async function fetchWeather() {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${FS_LAT}&longitude=${FS_LON}` +
+      `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m` +
+      `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum` +
+      `&temperature_unit=celsius&wind_speed_unit=kmh&timezone=America%2FEdmonton&forecast_days=1`;
+    const data = await (await fetch(url)).json();
+    const c = data.current, d = data.daily;
+    return {
+      temp: Math.round(c.temperature_2m), feels: Math.round(c.apparent_temperature),
+      wind: Math.round(c.wind_speed_10m), humidity: c.relative_humidity_2m,
+      desc: wmoDesc(c.weather_code),
+      high: Math.round(d.temperature_2m_max[0]), low: Math.round(d.temperature_2m_min[0]),
+      precip: d.precipitation_sum[0],
+    };
+  } catch { return null; }
+}
+
+function wmoDesc(code) {
+  if (code === 0) return 'Clear sky';
+  if (code <= 2)  return 'Partly cloudy';
+  if (code === 3) return 'Overcast';
+  if (code <= 49) return 'Fog';
+  if (code <= 57) return 'Drizzle';
+  if (code <= 67) return 'Rain';
+  if (code <= 77) return 'Snow';
+  if (code <= 82) return 'Rain showers';
+  if (code <= 86) return 'Snow showers';
+  if (code <= 99) return 'Thunderstorm';
+  return 'Unknown';
+}
+
+// [time_hhmm_or_null, label, skip_if_no_boarding]
+const ROUTINE_WEEKDAY = [
+  ['08:00', 'Let out dogs and feed', true],
+  ['08:30', 'Take pill', false],
+  ['08:30', 'Work', false],
+  ['12:15', 'Let out dogs (lunch)', true],
+  ['17:15', 'Let out dogs and feed supper', true],
+  ['17:30', 'Evening — meal prep / cook dinner', false],
+  [null,    'Spend time with dogs (30 min)', false],
+  [null,    'Exercise (30 min)', false],
+  [null,    'Office study (1 hour)', false],
+];
+const ROUTINE_WEEKEND = [
+  ['08:00', 'Let out dogs and feed', true],
+  ['08:30', 'Take pill', false],
+  ['12:15', 'Let out dogs (lunch)', true],
+  ['17:15', 'Let out dogs and feed supper', true],
+  [null,    'Meal prep / cook dinner', false],
+  [null,    'Spend time with dogs (30 min)', false],
+  [null,    'Exercise (30 min)', false],
+];
+
+async function renderSchedule() {
+  const td       = todayStr();
+  const tmr      = tomorrowStr();
+  const now      = new Date();
+  const nowMins  = now.getHours() * 60 + now.getMinutes();
+  const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+  const hasBoarded = _bookings.some(b => b.status === 'active');
+
+  // Weather
+  const w = await fetchWeather();
+  const wEl = document.getElementById('sched-weather');
+  wEl.className = 'sched-weather';
+  if (w) {
+    wEl.innerHTML = `
+      <div>
+        <div class="sched-weather-main">${w.temp}°C</div>
+        <div class="sched-weather-desc">${w.desc} · Feels like ${w.feels}°C</div>
+      </div>
+      <div class="sched-weather-details">
+        <span>↑ ${w.high}° / ↓ ${w.low}°</span>
+        <span>💨 ${w.wind} km/h</span>
+        <span>💧 ${w.humidity}%</span>
+        ${w.precip > 0 ? `<span>🌧 ${w.precip} mm</span>` : ''}
+        <span style="color:#94a3b8">Fort Simpson, NWT</span>
+      </div>`;
+  } else {
+    wEl.innerHTML = '<div class="sched-weather-desc" style="color:#94a3b8">Weather unavailable</div>';
+  }
+
+  // Routine
+  const routine = isWeekend ? ROUTINE_WEEKEND : ROUTINE_WEEKDAY;
+  let rHTML = '<div class="sched-card"><div class="sched-card-title">Routine</div>';
+  routine.forEach(([time, label, skipIfNoBoarding]) => {
+    if (skipIfNoBoarding && !hasBoarded) return;
+    const timeMins = time ? (parseInt(time) * 60 + parseInt(time.split(':')[1])) : null;
+    const past     = timeMins !== null && nowMins > timeMins;
+    rHTML += `<div class="sched-item ${past ? 'past' : ''}">
+      <div class="sched-time">${time ? fmtTime(time + ':00') : ''}</div>
+      <div class="sched-label">${label}</div>
+    </div>`;
+  });
+  // Scheduled cleanings for today
+  _cleanings.filter(c => c.scheduled_date === td).forEach(c => {
+    rHTML += `<div class="sched-item">
+      <div class="sched-time">5:30pm</div>
+      <div class="sched-label">🧹 Clean K${c.kennel_number} — ${c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)'}</div>
+    </div>`;
+  });
+  // Optional cleanings (no check-in in next 7 days for this kennel)
+  const cutoff = new Date(td); cutoff.setDate(cutoff.getDate() + 7);
+  const cutStr = cutoff.toISOString().slice(0, 10);
+  _cleanings.filter(c => !c.scheduled_date).forEach(c => {
+    const hasUpcoming = _bookings.some(b =>
+      b.kennel_number === c.kennel_number && b.status === 'pending' && b.check_in_date <= cutStr
+    );
+    if (!hasUpcoming) {
+      rHTML += `<div class="sched-item">
+        <div class="sched-time"></div>
+        <div class="sched-label sched-optional">Optional: clean K${c.kennel_number} if time permits</div>
+      </div>`;
+    }
+  });
+  rHTML += '</div>';
+  document.getElementById('sched-routine').innerHTML = rHTML;
+
+  // Checkouts today
+  const outs = _bookings.filter(b => b.check_out_date === td && b.status === 'active');
+  document.getElementById('sched-kennel-out').innerHTML =
+    '<div class="sched-card"><div class="sched-card-title">Kennel Checkouts — Today</div>' +
+    (outs.length ? outs.map(b => {
+      const t    = b.check_out_time ? fmtTime(b.check_out_time) : 'time TBD';
+      const past = b.check_out_time && nowMins > parseInt(b.check_out_time)*60 + parseInt(b.check_out_time.split(':')[1]);
+      const os   = b.notes && b.notes.toLowerCase().includes('off-site') ? ' <span class="badge badge-purple" style="font-size:0.65rem">Off-site</span>' : '';
+      return `<div class="sched-item ${past?'past':''}">
+        <div class="sched-time">${t}</div>
+        <div class="sched-label">🔴 ${b.dog_name} — K${b.kennel_number}${os}</div>
+        <button class="btn btn-sm btn-danger" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Check out</button>
+      </div>`;
+    }).join('') : '<div class="empty">No checkouts today.</div>') + '</div>';
+
+  // Check-ins today
+  const ins = _bookings.filter(b => b.check_in_date === td && b.status === 'pending');
+  document.getElementById('sched-kennel-in').innerHTML =
+    '<div class="sched-card"><div class="sched-card-title">Kennel Check-Ins — Today</div>' +
+    (ins.length ? ins.map(b => {
+      const t    = b.check_in_time ? fmtTime(b.check_in_time) : 'time TBD';
+      const past = b.check_in_time && nowMins > parseInt(b.check_in_time)*60 + parseInt(b.check_in_time.split(':')[1]);
+      return `<div class="sched-item ${past?'past':''}">
+        <div class="sched-time">${t}</div>
+        <div class="sched-label">🟢 ${b.dog_name} — K${b.kennel_number}</div>
+        <button class="btn btn-sm btn-success" onclick="openLogCheckin(${JSON.stringify(b).split('"').join("'")})">Check in</button>
+      </div>`;
+    }).join('') : '<div class="empty">No check-ins today.</div>') + '</div>';
+
+  // Tomorrow
+  const tmrOut = _bookings.filter(b => b.check_out_date === tmr && b.status === 'active');
+  const tmrIn  = _bookings.filter(b => b.check_in_date  === tmr && b.status === 'pending');
+  let tmrHTML  = '<div class="sched-card"><div class="sched-card-title">Kennel Check-Ins / Outs — Tomorrow</div>';
+  if (!tmrOut.length && !tmrIn.length) tmrHTML += '<div class="empty">Nothing tomorrow.</div>';
+  tmrOut.forEach(b => { tmrHTML += `<div class="sched-item"><div class="sched-time"></div><div class="sched-label">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div></div>`; });
+  tmrIn.forEach(b  => { tmrHTML += `<div class="sched-item"><div class="sched-time"></div><div class="sched-label">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div></div>`; });
+  document.getElementById('sched-kennel-tmr').innerHTML = tmrHTML + '</div>';
+
+  // Reminders
+  const pinned = _reminders.filter(r => !r.target_date || r.target_date <= td);
+  let pinHTML  = '<div class="sched-card"><div class="sched-card-title">📌 Reminders</div>';
+  if (!pinned.length) pinHTML += '<div class="empty">No reminders for today.</div>';
+  pinned.forEach(r => { pinHTML += `<div class="sched-pin">• ${r.text}</div>`; });
+  document.getElementById('sched-reminders').innerHTML = pinHTML + '</div>';
 }
 
 function openAddShopping() {
