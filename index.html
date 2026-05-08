@@ -263,7 +263,6 @@
     <button class="tab-btn active" id="tab-overview" onclick="switchTab('overview')">Overview</button>
     <button class="tab-btn" id="tab-schedule" onclick="switchTab('schedule')">Schedule</button>
     <button class="tab-btn" id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
-    <button class="tab-btn" id="tab-history" onclick="switchTab('history')">History</button>
   </div>
 
   <!-- SCHEDULE VIEW -->
@@ -294,21 +293,12 @@
         <button class="filter-btn active" id="inv-f-all" onclick="setInvFilter('all')">All Open</button>
         <button class="filter-btn" id="inv-f-pending" onclick="setInvFilter('pending')">Awaiting Invoice</button>
         <button class="filter-btn" id="inv-f-sent" onclick="setInvFilter('sent')">Awaiting Payment</button>
+        <button class="filter-btn" id="inv-f-history" onclick="setInvFilter('history')">History</button>
       </div>
       <div id="inv-page-body"><div class="loading">Loading…</div></div>
     </div>
   </div>
 
-  <!-- HISTORY PAGE -->
-  <div id="history-view" style="display:none">
-    <div class="page-view">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-        <h2 style="margin:0">Kennel History</h2>
-        <button class="btn btn-secondary" onclick="exportHistoryCSV()">Export CSV</button>
-      </div>
-      <div id="history-body"><div class="loading">Loading…</div></div>
-    </div>
-  </div>
 
   <main id="overview-view">
 
@@ -328,15 +318,6 @@
         </div>
         <div class="kennel-grid" id="kennel-grid"></div>
       </div>
-    </div>
-
-    <!-- Today -->
-    <div class="card">
-      <div class="card-header">
-        <h2>Today</h2>
-        <span id="today-date-badge" class="badge badge-blue"></span>
-      </div>
-      <div class="card-body" id="today-body"><div class="loading">Loading…</div></div>
     </div>
 
     <!-- Kennel Details -->
@@ -549,8 +530,7 @@ function showToast(msg, type = 'success') {
 // LOAD ALL
 // ============================================================
 async function loadAll() {
-  document.getElementById('today-chip').textContent       = todayFull();
-  document.getElementById('today-date-badge').textContent = todayFull();
+  document.getElementById('today-chip').textContent = todayFull();
 
   const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
@@ -558,7 +538,7 @@ async function loadAll() {
     db.from('tasks').select('*').eq('status','active'),
     db.from('reminders').select('*').eq('status','active').order('target_date', {nullsFirst: false}),
     db.from('shopping_items').select('*').eq('status','active').order('list_name').order('item'),
-    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time)').neq('status','paid'),
+    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time)'),
     db.from('households').select('*').order('owner_name'),
   ]);
 
@@ -576,7 +556,6 @@ async function loadAll() {
 function renderAll() {
   renderKennels(_bookings, _cleanings);
   renderKennelDetails(_bookings);
-  renderToday(_bookings, _cleanings);
   renderCleanings(_cleanings);
   renderInvoices(_invoices, _bookings);
   renderReminders(_reminders);
@@ -639,13 +618,21 @@ function renderKennels(bookings, cleanings) {
     const dateLabel = rep
       ? (isActive ? 'Out ' + fmtDate(rep.check_out_date) : 'In ' + fmtDate(rep.check_in_date))
       : isDirty ? 'Needs clean' : '';
-    const actionLabel = isActive ? 'tap to check out' : '';
+    const actionLabel = isActive ? 'tap to check out' : (isDirty ? 'tap to mark cleaned' : '');
 
     const cell = document.createElement('div');
     cell.className = 'kennel-cell ' + display;
     cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogNames}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
 
+    if (isDirty && !isActive) {
+      const dirtyClean = cleanings.find(c => c.kennel_number === k);
+      if (dirtyClean) {
+        cell.style.cursor = 'pointer';
+        cell.onclick = () => markCleaningDone(dirtyClean.id, k);
+      }
+    }
     if (isActive) {
+      cell.style.cursor = 'pointer';
       cell.onclick = () => openLogCheckout(activeByKennel[k][0]);
     }
     grid.appendChild(cell);
@@ -668,8 +655,9 @@ function renderKennelDetails(bookings) {
 
   let html = '';
 
+  // Checkouts Today — always shown
+  html += '<div class="kd-section"><div class="kd-label">Checkouts Today</div>';
   if (outs.length) {
-    html += '<div class="kd-section"><div class="kd-label">Checkouts Today</div>';
     outs.forEach(b => {
       const t   = b.check_out_time ? fmtTime(b.check_out_time) : 'TBD';
       const os  = b.notes && b.notes.toLowerCase().includes('off-site') ? ' <span class="badge badge-purple">Off-site</span>' : '';
@@ -678,11 +666,14 @@ function renderKennelDetails(bookings) {
         <button class="btn btn-sm btn-danger" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Check out</button>
       </div>`;
     });
-    html += '</div>';
+  } else {
+    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
   }
+  html += '</div>';
 
+  // Check-Ins Today — always shown
+  html += '<div class="kd-section"><div class="kd-label">Check-Ins Today</div>';
   if (ins.length) {
-    html += '<div class="kd-section"><div class="kd-label">Check-Ins Today</div>';
     ins.forEach(b => {
       const t = b.check_in_time ? fmtTime(b.check_in_time) : 'TBD';
       html += `<div class="today-row">
@@ -690,88 +681,25 @@ function renderKennelDetails(bookings) {
         <button class="btn btn-sm btn-success" onclick="openLogCheckin(${JSON.stringify(b).split('"').join("'")})">Check in</button>
       </div>`;
     });
-    html += '</div>';
+  } else {
+    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
   }
+  html += '</div>';
 
+  // Check-Ins/Outs Tomorrow — always shown
+  html += '<div class="kd-section"><div class="kd-label">Check-Ins/Outs Tomorrow</div>';
   if (tmrOuts.length || tmrIns.length) {
-    html += '<div class="kd-section"><div class="kd-label">Tomorrow</div>';
     tmrOuts.forEach(b => { html += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div></div>`; });
     tmrIns.forEach(b  => { html += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div></div>`; });
-    html += '</div>';
+  } else {
+    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
   }
+  html += '</div>';
 
-  document.getElementById('kennel-details-body').innerHTML = html || '<div class="empty">No check-ins or checkouts today or tomorrow.</div>';
+  document.getElementById('kennel-details-body').innerHTML = html;
 }
 
 // ============================================================
-// TODAY
-// ============================================================
-function renderToday(bookings, cleanings) {
-  const td  = todayStr();
-  const tmr = tomorrowStr();
-
-  const checkouts    = bookings.filter(b => b.check_out_date === td  && b.status === 'active');
-  const checkins     = bookings.filter(b => b.check_in_date  === td  && b.status === 'pending');
-  const tmrCheckouts = bookings.filter(b => b.check_out_date === tmr && b.status === 'active');
-  const tmrCheckins  = bookings.filter(b => b.check_in_date  === tmr && b.status === 'pending');
-  const todayClean   = cleanings.filter(c => c.scheduled_date === td);
-
-  let parts = [];
-
-  if (checkouts.length) {
-    let h = '<div class="today-group"><div class="today-group-label">Checkouts</div>';
-    checkouts.forEach(b => {
-      const time    = b.check_out_time ? fmtTime(b.check_out_time) : 'time TBD';
-      const offsite = b.notes && b.notes.toLowerCase().includes('off-site') ? ' <span class="badge badge-purple">Off-site</span>' : '';
-      h += `<div class="today-row">
-        <div class="today-row-left">🔴 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${time}${offsite}</span>
-        </div>
-        <button class="btn btn-sm btn-danger" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Check out</button>
-      </div>`;
-    });
-    h += '</div>';
-    parts.push(h);
-  }
-
-  if (checkins.length) {
-    let h = '<div class="today-group"><div class="today-group-label">Check-ins</div>';
-    checkins.forEach(b => {
-      const time = b.check_in_time ? fmtTime(b.check_in_time) : 'time TBD';
-      h += `<div class="today-row">
-        <div class="today-row-left">🟢 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${time}</span></div>
-        <button class="btn btn-sm btn-success" onclick="openLogCheckin(${JSON.stringify(b).split('"').join("'")})">Check in</button>
-      </div>`;
-    });
-    h += '</div>';
-    parts.push(h);
-  }
-
-  if (todayClean.length) {
-    let h = '<div class="today-group"><div class="today-group-label">Cleanings</div>';
-    todayClean.forEach(c => {
-      const label = c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)';
-      h += `<div class="today-row">
-        <div class="today-row-left">🧹 K${c.kennel_number} <span class="today-meta">${label}</span></div>
-        <button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button>
-      </div>`;
-    });
-    h += '</div>';
-    parts.push(h);
-  }
-
-  if (tmrCheckouts.length || tmrCheckins.length) {
-    let h = '<div class="today-group"><div class="today-group-label">Tomorrow</div>';
-    tmrCheckouts.forEach(b => { h += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div></div>`; });
-    tmrCheckins.forEach(b  => { h += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div></div>`; });
-    h += '</div>';
-    parts.push(h);
-  }
-
-  document.getElementById('today-body').innerHTML = parts.length
-    ? parts.join('')
-    : '<div class="empty">Nothing scheduled for today.</div>';
-}
-
 // ============================================================
 // CLEANINGS
 // ============================================================
@@ -792,7 +720,7 @@ function renderCleanings(cleanings) {
       <td>${typeLabel}</td>
       <td>${dateCell}</td>
       <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}${c.notes ? '<br><em>' + c.notes + '</em>' : ''}</td>
-      <td><button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button></td>
+      <td>${!c.scheduled_date || c.scheduled_date > td ? `<button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button>` : ''}</td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -825,16 +753,16 @@ function renderInvoices(invoices, bookings) {
 
   let html = '';
 
-  // Stage 1: Awaiting Invoice
+  // Stage 1: Awaiting Invoice — always shown
   const stage1 = [...needInvoice.map(b => ({_type:'booking', b})), ...pending.map(i => ({_type:'invoice', i}))];
+  html += `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">Awaiting Invoice</div>`;
   if (stage1.length) {
-    html += `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">Awaiting Invoice</div>`;
     stage1.forEach(item => {
       if (item._type === 'booking') {
         const b = item.b;
         html += `<div class="inv-row">
           <div style="flex:1;font-size:0.875rem;color:#64748b">${b.dog_name} K${b.kennel_number} <span style="font-size:0.75rem;color:#94a3b8">out ${fmtDate(b.check_out_date)}</span></div>
-          <button class="btn btn-sm btn-secondary" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Log checkout</button>
+          <button class="btn btn-sm btn-secondary" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Mark Invoiced</button>
         </div>`;
       } else {
         const i = item.i;
@@ -848,12 +776,14 @@ function renderInvoices(invoices, bookings) {
         </div>`;
       }
     });
+  } else {
+    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
   }
 
-  // Stage 2: Awaiting Payment
+  // Stage 2: Awaiting Payment — always shown
+  html += '<div style="height:0.5rem"></div>';
+  html += `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">Awaiting Payment</div>`;
   if (sent.length) {
-    if (html) html += '<div style="height:0.5rem"></div>';
-    html += `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">Awaiting Payment</div>`;
     sent.forEach(i => {
       html += `<div class="inv-row" style="cursor:pointer" onclick="openInvoiceDetail('${i.id}')"
           onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
@@ -864,9 +794,11 @@ function renderInvoices(invoices, bookings) {
         </div>
       </div>`;
     });
+  } else {
+    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
   }
 
-  document.getElementById('invoices-body').innerHTML = html || '<div class="empty">No open invoices.</div>';
+  document.getElementById('invoices-body').innerHTML = html;
 }
 
 // ============================================================
@@ -962,15 +894,17 @@ function renderTasks(tasks) {
 // ============================================================
 function setInvFilter(f) {
   _invFilter = f;
-  ['all','pending','sent'].forEach(v => {
-    document.getElementById('inv-f-' + v).classList.toggle('active', v === f);
+  ['all','pending','sent','history'].forEach(v => {
+    const el = document.getElementById('inv-f-' + v);
+    if (el) el.classList.toggle('active', v === f);
   });
-  renderInvoicePage();
+  if (f === 'history') renderHistoryPage();
+  else renderInvoicePage();
 }
 
 function renderInvoicePage() {
   const invoices = _invoices.filter(i =>
-    _invFilter === 'all' ? true : i.status === _invFilter
+    _invFilter === 'all' ? i.status !== 'paid' : i.status === _invFilter
   );
   if (!invoices.length) {
     document.getElementById('inv-page-body').innerHTML = '<div class="empty">No invoices match this filter.</div>';
@@ -1016,7 +950,7 @@ function renderInvoicePage() {
 let _historyRows = [];
 
 async function renderHistoryPage() {
-  document.getElementById('history-body').innerHTML = '<div class="loading">Loading history…</div>';
+  document.getElementById('inv-page-body').innerHTML = '<div class="loading">Loading history…</div>';
   const { data: completedBookings } = await db.from('bookings')
     .select('*, invoices(days_billed,weeks_billed,off_site_delivery,outside_window_pickup,grace_extension_applied,grace_extension_notes,status,paid_date)')
     .eq('status','completed')
@@ -1024,11 +958,14 @@ async function renderHistoryPage() {
 
   _historyRows = completedBookings || [];
   if (!_historyRows.length) {
-    document.getElementById('history-body').innerHTML = '<div class="empty">No completed stays yet.</div>';
+    document.getElementById('inv-page-body').innerHTML = '<div class="empty">No completed stays yet.</div>';
     return;
   }
 
-  let html = '<div style="overflow-x:auto"><table class="tbl"><thead><tr>' +
+  let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
+    <button class="btn btn-secondary" onclick="exportHistoryCSV()">Export CSV</button>
+  </div>`;
+  html += '<div style="overflow-x:auto"><table class="tbl"><thead><tr>' +
     '<th>Dog</th><th>K</th><th>Check-In</th><th>Check-Out</th><th>Days</th><th>Wks</th><th>Flags</th><th>Invoice</th>' +
     '</tr></thead><tbody>';
 
@@ -1052,7 +989,7 @@ async function renderHistoryPage() {
     </tr>`;
   });
   html += '</tbody></table></div>';
-  document.getElementById('history-body').innerHTML = html;
+  document.getElementById('inv-page-body').innerHTML = html;
 }
 
 function exportHistoryCSV() {
@@ -1450,15 +1387,14 @@ async function purchaseShopping(id, item) {
 // TABS
 // ============================================================
 function switchTab(tab) {
-  ['overview','schedule','invoices','history'].forEach(t => {
+  ['overview','schedule','invoices'].forEach(t => {
     const view = document.getElementById(t + '-view');
     if (view) view.style.display = t === tab ? '' : 'none';
     const btn = document.getElementById('tab-' + t);
     if (btn) btn.classList.toggle('active', t === tab);
   });
   if (tab === 'schedule') renderSchedule();
-  if (tab === 'invoices') renderInvoicePage();
-  if (tab === 'history')  renderHistoryPage();
+  if (tab === 'invoices') setInvFilter(_invFilter);
 }
 
 // ============================================================
