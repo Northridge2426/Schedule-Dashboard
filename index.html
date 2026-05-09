@@ -1846,7 +1846,7 @@ async function renderSchedule() {
 
   // Reminders: pinned (persistent=true, no date) always show; dated reminders show only on their exact date
   const schedReminders = _reminders
-    .filter(r => (r.persistent && !r.target_date) || r.target_date === td)
+    .filter(r => (r.persistent && !r.target_date) || (r.target_date && r.target_date <= td))
     .sort((a, b) => {
       if (a.persistent && !b.persistent) return -1;
       if (!a.persistent && b.persistent) return 1;
