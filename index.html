@@ -435,7 +435,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // MODULE STATE
 // ============================================================
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
-    _shopping = [], _invoices = [], _households = [];
+    _shopping = [], _invoices = [], _households = [], _kennels = [];
 let _completions = new Set();
 let _shopTab   = 'local';
 let _invFilter = 'all';
@@ -559,7 +559,7 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').not('status','in','("completed","skipped")').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
@@ -567,6 +567,7 @@ async function loadAll() {
     db.from('shopping_items').select('*').eq('status','active').order('list_name').order('item'),
     db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time)'),
     db.from('households').select('*').order('owner_name'),
+    db.from('kennels').select('*').order('kennel_number'),
   ]);
 
   _bookings   = rBook.data   || [];
@@ -576,12 +577,13 @@ async function loadAll() {
   _shopping   = rShop.data   || [];
   _invoices   = rInv.data    || [];
   _households = rHouse.data  || [];
+  _kennels    = rKen.data    || [];
 
   renderAll();
 }
 
 function renderAll() {
-  renderKennels(_bookings, _cleanings);
+  renderKennels(_bookings, _cleanings, _kennels);
   renderKennelDetails(_bookings);
   renderCleanings(_cleanings);
   renderInvoices(_invoices, _bookings);
@@ -593,7 +595,10 @@ function renderAll() {
 // ============================================================
 // KENNEL STATUS
 // ============================================================
-function renderKennels(bookings, cleanings) {
+function renderKennels(bookings, cleanings, kennels) {
+  // Build kennel block map
+  const kennelMap = {};
+  (kennels || []).forEach(k => { kennelMap[k.kennel_number] = k; });
   const td = todayStr();
   const in7 = new Date(td); in7.setDate(in7.getDate() + 7);
   const in7Str = in7.toISOString().slice(0, 10);
@@ -640,12 +645,16 @@ function renderKennels(bookings, cleanings) {
 
     const display = isDirty ? 'dirty' : isCheckoutToday ? 'checkout' : isActive ? 'active' : upcoming7 ? 'upcoming' : 'empty';
 
+    const isBlocked = !isActive && !isDirty && kennelMap[k]?.blocked_off;
+
     const entries  = activeByKennel[k] || (upcoming7 ? pendingByKennel[k] : null) || null;
-    const dogNames = entries ? entries.map(b => b.dog_name).join('+') : '—';
+    const dogNames = entries
+      ? entries.map(b => b.dog_name).join('+')
+      : isBlocked ? '<span style="color:#94a3b8;font-size:0.68rem;font-weight:600">Blocked</span>' : '—';
     const rep      = entries ? entries[0] : null;
     const dateLabel = rep
       ? (isActive ? 'Out ' + fmtDate(rep.check_out_date) : 'In ' + fmtDate(rep.check_in_date))
-      : isDirty ? 'Needs clean' : '';
+      : isDirty ? 'Needs clean' : isBlocked ? (kennelMap[k].block_reason || '') : '';
     const actionLabel = isActive ? 'tap to check out' : (isDirty ? 'tap to mark cleaned' : '');
 
     const cell = document.createElement('div');
@@ -658,10 +667,16 @@ function renderKennels(bookings, cleanings) {
         cell.style.cursor = 'pointer';
         cell.onclick = () => markCleaningDone(dirtyClean.id, k);
       }
-    }
-    if (isActive) {
+    } else if (isActive) {
       cell.style.cursor = 'pointer';
       cell.onclick = () => openLogCheckout(activeByKennel[k][0]);
+    } else if (display === 'empty') {
+      cell.style.cursor = 'pointer';
+      if (isBlocked) {
+        cell.onclick = () => openBlockedKennelModal(k, kennelMap[k].block_reason);
+      } else {
+        cell.onclick = () => openVacantKennelModal(k);
+      }
     }
     grid.appendChild(cell);
   }
@@ -1248,6 +1263,9 @@ function openLogCheckin(booking) {
     }).eq('id', b.id);
     if (error) throw error;
 
+    // Auto-clear any block on this kennel when a dog checks in
+    await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', b.kennel_number);
+
     closeModal();
     showToast(`${b.dog_name} checked in to K${b.kennel_number}`);
     await loadAll();
@@ -1255,9 +1273,76 @@ function openLogCheckin(booking) {
 }
 
 // ============================================================
+// ACTION: VACANT KENNEL MODAL (E4)
+// ============================================================
+function openVacantKennelModal(kennelNum) {
+  const body = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.25rem">
+    <button class="btn btn-secondary" style="padding:1.25rem;font-size:0.875rem;height:auto;flex-direction:column;gap:0.25rem"
+      onclick="closeModal();openAddBooking(${kennelNum})">+ Add Booking</button>
+    <button class="btn btn-secondary" style="padding:1.25rem;font-size:0.875rem;height:auto;flex-direction:column;gap:0.25rem"
+      onclick="closeModal();openBlockKennel(${kennelNum})">Block Off</button>
+  </div>`;
+  openModal('K' + kennelNum + ' — Vacant', body, null);
+}
+
+function openBlockKennel(kennelNum) {
+  const body = `
+    <div class="form-field">
+      <label>Reason (optional)</label>
+      <input type="text" id="f-block-reason" placeholder="e.g. Storage, Repairs">
+    </div>`;
+  openModal('Block Off K' + kennelNum, body, async () => {
+    const reason = document.getElementById('f-block-reason').value.trim() || null;
+    const { error } = await db.from('kennels').update({ blocked_off: true, block_reason: reason }).eq('kennel_number', kennelNum);
+    if (error) throw error;
+    closeModal();
+    showToast('K' + kennelNum + ' blocked off');
+    await loadAll();
+  }, 'Block Off');
+}
+
+function openBlockedKennelModal(kennelNum, reason) {
+  const body = `
+    <div style="margin-bottom:1rem;font-size:0.875rem;color:#64748b">
+      ${reason ? `Blocked: <strong>${reason}</strong>` : 'No reason given.'}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+      <button class="btn btn-secondary" style="height:auto;padding:0.75rem"
+        onclick="closeModal();openEditBlockReason(${kennelNum},'${(reason||'').replace(/'/g,"\\'")}')">Edit Reason</button>
+      <button class="btn btn-danger" style="height:auto;padding:0.75rem"
+        onclick="closeModal();unblockKennel(${kennelNum})">Remove Block</button>
+    </div>`;
+  openModal('K' + kennelNum + ' — Blocked', body, null);
+}
+
+function openEditBlockReason(kennelNum, currentReason) {
+  const body = `
+    <div class="form-field">
+      <label>Reason</label>
+      <input type="text" id="f-block-reason" value="${currentReason}">
+    </div>`;
+  openModal('Edit Block Reason — K' + kennelNum, body, async () => {
+    const reason = document.getElementById('f-block-reason').value.trim() || null;
+    const { error } = await db.from('kennels').update({ block_reason: reason }).eq('kennel_number', kennelNum);
+    if (error) throw error;
+    closeModal();
+    showToast('Block reason updated');
+    await loadAll();
+  });
+}
+
+async function unblockKennel(kennelNum) {
+  if (!confirm(`Remove block from K${kennelNum}?`)) return;
+  const { error } = await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', kennelNum);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast('K' + kennelNum + ' unblocked');
+  await loadAll();
+}
+
+// ============================================================
 // ACTION: ADD BOOKING
 // ============================================================
-function openAddBooking() {
+function openAddBooking(defaultKennel = null) {
   const householdOptions = _households.map(h =>
     `<option value="${h.id}">${h.owner_name}</option>`
   ).join('');
@@ -1267,7 +1352,7 @@ function openAddBooking() {
     <div class="form-row-2">
       <div class="form-field"><label>Kennel *</label>
         <select id="f-kennel">
-          ${[...Array(10)].map((_,i) => `<option value="${i+1}">K${i+1}</option>`).join('')}
+          ${[...Array(10)].map((_,i) => `<option value="${i+1}" ${defaultKennel === i+1 ? 'selected' : ''}>K${i+1}</option>`).join('')}
         </select>
       </div>
       <div class="form-field"><label>Owner</label>
