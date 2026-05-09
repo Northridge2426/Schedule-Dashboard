@@ -1047,25 +1047,27 @@ function exportHistoryCSV() {
 }
 
 // ============================================================
-// ACTION: LOG CHECKOUT
+// ACTION: MANAGE BOOKING (D2 — replaces Log Check-Out)
 // ============================================================
 function openLogCheckout(booking) {
-  // booking may come from JSON.stringify → need to handle both object and string forms
   if (typeof booking === 'string') {
     try { booking = JSON.parse(booking.replace(/'/g, '"')); } catch(e) {}
   }
-  // Find fresh copy from module state
   const b = _bookings.find(x => x.id === booking.id) || booking;
+  const isCompleted = b.status === 'completed';
 
   const body = `
     <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
-    <div class="form-field"><label>Check-in</label><input readonly value="${fmtDate(b.check_in_date)}${b.check_in_time ? ' at ' + fmtTime(b.check_in_time) : ' (time unknown)'}"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
+      <div class="form-field"><label>Check-in time</label><input type="time" id="f-in-time" value="${b.check_in_time ? b.check_in_time.slice(0,5) : ''}"></div>
+    </div>
     <div class="form-row-2">
       <div class="form-field"><label>Check-out date</label><input type="date" id="f-out-date" value="${b.check_out_date || todayStr()}"></div>
-      <div class="form-field"><label>Check-out time *</label><input type="time" id="f-out-time" value="${b.check_out_time || ''}"></div>
+      <div class="form-field"><label>Check-out time</label><input type="time" id="f-out-time" value="${b.check_out_time ? b.check_out_time.slice(0,5) : ''}"></div>
     </div>
     <div class="form-field">
-      <div class="form-check"><input type="checkbox" id="f-offsite" ${b.notes&&b.notes.includes('off-site')?'checked':''}><label for="f-offsite">Off-site delivery</label></div>
+      <div class="form-check"><input type="checkbox" id="f-offsite" ${b.notes&&b.notes.toLowerCase().includes('off-site')?'checked':''}><label for="f-offsite">Off-site delivery</label></div>
       <div class="form-check"><input type="checkbox" id="f-outside"><label for="f-outside">Outside-window pickup</label></div>
       <div class="form-check"><input type="checkbox" id="f-grace" onchange="toggleGraceNotes(this)"><label for="f-grace">Grace extension applied</label></div>
     </div>
@@ -1074,49 +1076,109 @@ function openLogCheckout(booking) {
       <input type="text" id="f-grace-notes" placeholder="e.g. Extended to 19:30">
     </div>`;
 
-  openModal('Log Check-Out: ' + b.dog_name, body, async () => {
-    const outDate  = document.getElementById('f-out-date').value;
+  openModal('Manage Booking: ' + b.dog_name + ' — K' + b.kennel_number, body, null);
+
+  const checkoutLabel = isCompleted ? 'Create Invoice' : 'Check Out';
+  document.getElementById('modal-footer').innerHTML = `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-secondary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save</button>
+    <button class="btn btn-primary" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">${checkoutLabel}</button>`;
+}
+
+async function manageBookingSave(bookingId) {
+  const btn = document.getElementById('mb-save-btn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const inDate  = document.getElementById('f-in-date').value  || null;
+    const inTime  = document.getElementById('f-in-time').value  || null;
+    const outDate = document.getElementById('f-out-date').value || null;
+    const outTime = document.getElementById('f-out-time').value || null;
+
+    const { error } = await db.from('bookings').update({
+      check_in_date:  inDate,
+      check_in_time:  inTime,
+      check_out_date: outDate,
+      check_out_time: outTime,
+      updated_at: new Date().toISOString(),
+    }).eq('id', bookingId);
+    if (error) throw error;
+
+    // Retroactive billing: update existing invoice if dates changed
+    if (inDate && outDate) {
+      const days  = Math.max(1, diffDays(inDate, outDate));
+      const weeks = days >= 7 ? Math.floor(days / 7) : null;
+      const offsite    = document.getElementById('f-offsite').checked;
+      const outside    = document.getElementById('f-outside').checked;
+      const grace      = document.getElementById('f-grace').checked;
+      const graceNotes = document.getElementById('f-grace-notes')?.value || null;
+      const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bookingId).maybeSingle();
+      if (inv) {
+        await db.from('invoices').update({
+          days_billed: days, weeks_billed: weeks,
+          off_site_delivery: offsite, outside_window_pickup: outside,
+          grace_extension_applied: grace, grace_extension_notes: graceNotes,
+        }).eq('id', inv.id);
+      }
+    }
+
+    closeModal();
+    showToast('Booking updated');
+    await loadAll();
+  } catch(e) {
+    showToast(e.message || 'Error saving', 'error');
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+async function manageBookingCheckout(bookingId) {
+  const btn = document.getElementById('mb-checkout-btn');
+  btn.disabled = true; btn.textContent = 'Working…';
+  try {
+    const b        = _bookings.find(x => x.id === bookingId);
+    const inDate   = document.getElementById('f-in-date').value  || b?.check_in_date;
+    const outDate  = document.getElementById('f-out-date').value || todayStr();
     const outTime  = document.getElementById('f-out-time').value;
     const offsite  = document.getElementById('f-offsite').checked;
     const outside  = document.getElementById('f-outside').checked;
     const grace    = document.getElementById('f-grace').checked;
-    const graceNotes = document.getElementById('f-grace-notes')?.value || '';
+    const graceNotes = document.getElementById('f-grace-notes')?.value || null;
 
     if (!outTime) throw new Error('Check-out time is required');
 
-    // Calculate billing
-    const checkIn  = b.check_in_date;
-    const days     = Math.max(1, diffDays(checkIn, outDate));
-    const weeks    = days >= 7 ? Math.floor(days / 7) : null;
-    const invDate  = nextWorkday(outDate);
+    const days    = Math.max(1, diffDays(inDate, outDate));
+    const weeks   = days >= 7 ? Math.floor(days / 7) : null;
+    const invDate = nextWorkday(outDate);
 
-    // Update booking to completed
     const { error: bookErr } = await db.from('bookings').update({
+      check_in_date:  inDate,
       check_out_date: outDate,
       check_out_time: outTime,
       status: 'completed',
       updated_at: new Date().toISOString(),
-    }).eq('id', b.id);
+    }).eq('id', bookingId);
     if (bookErr) throw bookErr;
 
-    // Create invoice
-    const { error: invErr } = await db.from('invoices').insert({
-      booking_id: b.id,
-      days_billed: days,
-      weeks_billed: weeks,
-      off_site_delivery: offsite,
-      outside_window_pickup: outside,
-      grace_extension_applied: grace,
-      grace_extension_notes: graceNotes || null,
+    const invData = {
+      days_billed: days, weeks_billed: weeks,
+      off_site_delivery: offsite, outside_window_pickup: outside,
+      grace_extension_applied: grace, grace_extension_notes: graceNotes,
       invoice_date: invDate,
-      status: 'pending',
-    });
-    if (invErr) throw invErr;
+    };
+    const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bookingId).maybeSingle();
+    if (inv) {
+      await db.from('invoices').update(invData).eq('id', inv.id);
+    } else {
+      const { error: invErr } = await db.from('invoices').insert({ booking_id: bookingId, ...invData, status: 'pending' });
+      if (invErr) throw invErr;
+    }
 
     closeModal();
-    showToast(`${b.dog_name} checked out · Invoice due ${fmtDate(invDate)}`);
+    showToast(`${b?.dog_name || 'Dog'} checked out · Invoice due ${fmtDate(invDate)}`);
     await loadAll();
-  }, 'Confirm Check-Out');
+  } catch(e) {
+    showToast(e.message || 'Error', 'error');
+    btn.disabled = false; btn.textContent = 'Check Out';
+  }
 }
 
 function toggleGraceNotes(cb) {
