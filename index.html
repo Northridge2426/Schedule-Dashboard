@@ -616,8 +616,11 @@ function renderKennels(bookings, cleanings, kennels) {
     if (!pendingByKennel[b.kennel_number]) pendingByKennel[b.kennel_number] = [];
     pendingByKennel[b.kennel_number].push(b);
   });
-  // Any scheduled/pending cleaning = dirty
-  cleanings.forEach(c => dirtyKennels.add(c.kennel_number));
+  // Only mark dirty if there's no active dog — a future-scheduled cleaning
+  // doesn't make a kennel "dirty" while the dog is still in it
+  cleanings.forEach(c => {
+    if (!activeByKennel[c.kennel_number]) dirtyKennels.add(c.kennel_number);
+  });
 
   // Capacity = distinct kennels with active stays only
   const occupied   = Object.keys(activeByKennel).length;
