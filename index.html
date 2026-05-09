@@ -833,24 +833,35 @@ function renderInvoices(invoices, bookings) {
 // REMINDERS
 // ============================================================
 function renderReminders(reminders) {
-  if (!reminders.length) {
-    document.getElementById('reminders-body').innerHTML = '<div class="empty">No active reminders.</div>';
-    return;
-  }
+  const el = document.getElementById('reminders-body');
+  if (!reminders.length) { el.innerHTML = '<div class="empty">No active reminders.</div>'; return; }
   const td = todayStr();
+  // Persistent (pinned) first, then by target_date asc, nulls last
+  const sorted = [...reminders].sort((a, b) => {
+    if (a.persistent && !b.persistent) return -1;
+    if (!a.persistent && b.persistent) return 1;
+    if (!a.target_date && !b.target_date) return 0;
+    if (!a.target_date) return 1;
+    if (!b.target_date) return -1;
+    return a.target_date.localeCompare(b.target_date);
+  });
   let html = '';
-  reminders.forEach(r => {
-    const overdue = r.target_date && r.target_date < td;
+  sorted.forEach(r => {
+    const overdue  = r.target_date && r.target_date < td;
+    const pinStyle = r.persistent ? 'background:#fffbeb;border-radius:6px;margin:0 -0.25rem;padding:0.35rem 0.25rem;' : '';
+    const pinColor = r.persistent ? '#f59e0b' : '#cbd5e1';
     const datePart = r.target_date
-      ? `<div class="reminder-date ${overdue?'overdue':''}">${fmtDate(r.target_date)}</div>`
-      : `<div class="reminder-date">📌</div>`;
-    html += `<div class="reminder-row">
+      ? `<div class="reminder-date ${overdue ? 'overdue' : ''}">${fmtDate(r.target_date)}</div>`
+      : `<div class="reminder-date" style="color:${pinColor}">📌</div>`;
+    html += `<div class="reminder-row" style="${pinStyle}">
       ${datePart}
       <div class="reminder-text">${r.text}</div>
+      <button class="btn-icon" title="${r.persistent ? 'Unpin' : 'Pin to top'}" onclick="toggleReminderPin('${r.id}',${r.persistent})" style="color:${pinColor}">📌</button>
+      <button class="btn-icon" title="Edit" onclick="openEditReminder('${r.id}')">✏</button>
       <button class="btn-icon" title="Dismiss" onclick="dismissReminder('${r.id}')">×</button>
     </div>`;
   });
-  document.getElementById('reminders-body').innerHTML = html;
+  el.innerHTML = html;
 }
 
 // ============================================================
@@ -1406,12 +1417,12 @@ function openInvoiceDetail(id) {
 // ============================================================
 // ACTION: REMINDERS
 // ============================================================
-function openAddReminder() {
+function openAddReminder(defaultDate = '') {
   const body = `
     <div class="form-field"><label>Reminder *</label><textarea id="f-reminder-text" rows="2" placeholder="What do you need to remember?"></textarea></div>
-    <div class="form-field"><label>Target date (optional)</label><input type="date" id="f-reminder-date"></div>
+    <div class="form-field"><label>Target date (optional)</label><input type="date" id="f-reminder-date" value="${defaultDate}"></div>
     <div class="form-field">
-      <div class="form-check"><input type="checkbox" id="f-persistent"><label for="f-persistent">📌 Persistent — keep until manually cleared</label></div>
+      <div class="form-check"><input type="checkbox" id="f-persistent"><label for="f-persistent">📌 Pin to top — show on every day's schedule until cleared</label></div>
       <div class="form-hint">Leave unchecked for day-of only (shows on the date, then disappears)</div>
     </div>`;
 
@@ -1426,6 +1437,7 @@ function openAddReminder() {
     closeModal();
     showToast('Reminder added');
     await loadAll();
+    if (document.getElementById('schedule-view')?.style.display !== 'none') renderSchedule();
   });
 }
 
@@ -1434,6 +1446,38 @@ async function dismissReminder(id) {
   if (error) { showToast('Error', 'error'); return; }
   showToast('Reminder dismissed');
   await loadAll();
+  if (document.getElementById('schedule-view')?.style.display !== 'none') renderSchedule();
+}
+
+async function toggleReminderPin(id, currentPersistent) {
+  const { error } = await db.from('reminders').update({ persistent: !currentPersistent }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast(currentPersistent ? 'Reminder unpinned' : 'Reminder pinned to top');
+  await loadAll();
+  if (document.getElementById('schedule-view')?.style.display !== 'none') renderSchedule();
+}
+
+function openEditReminder(id) {
+  const r = _reminders.find(x => x.id === id);
+  if (!r) return;
+  const body = `
+    <div class="form-field"><label>Reminder *</label><textarea id="f-reminder-text" rows="2">${r.text}</textarea></div>
+    <div class="form-field"><label>Target date (optional)</label><input type="date" id="f-reminder-date" value="${r.target_date || ''}"></div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-persistent" ${r.persistent ? 'checked' : ''}><label for="f-persistent">📌 Pin to top — show on every day's schedule until cleared</label></div>
+    </div>`;
+  openModal('Edit Reminder', body, async () => {
+    const text       = document.getElementById('f-reminder-text').value.trim();
+    const targetDate = document.getElementById('f-reminder-date').value || null;
+    const persistent = document.getElementById('f-persistent').checked;
+    if (!text) throw new Error('Reminder text is required');
+    const { error } = await db.from('reminders').update({ text, target_date: targetDate, persistent }).eq('id', id);
+    if (error) throw error;
+    closeModal();
+    showToast('Reminder updated');
+    await loadAll();
+    if (document.getElementById('schedule-view')?.style.display !== 'none') renderSchedule();
+  });
 }
 
 // ============================================================
@@ -1709,11 +1753,29 @@ async function renderSchedule() {
   rHTML += '</div>';
   document.getElementById('sched-routine').innerHTML = rHTML;
 
-  // Reminders due on selected date
-  const pinned = _reminders.filter(r => !r.target_date || r.target_date <= td);
-  let pinHTML  = '<div class="sched-card"><div class="sched-card-title">📌 Reminders</div>';
-  if (!pinned.length) pinHTML += '<div class="empty">No reminders for this date.</div>';
-  pinned.forEach(r => { pinHTML += `<div class="sched-pin">• ${r.text}</div>`; });
+  // Reminders: pinned (persistent=true, no date) always show; dated reminders show only on their exact date
+  const schedReminders = _reminders
+    .filter(r => (r.persistent && !r.target_date) || r.target_date === td)
+    .sort((a, b) => {
+      if (a.persistent && !b.persistent) return -1;
+      if (!a.persistent && b.persistent) return 1;
+      return 0;
+    });
+  let pinHTML = `<div class="sched-card">
+    <div class="sched-card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+      <span>📌 Reminders</span>
+      <button class="btn-add" onclick="openAddReminder('${td}')">+ Add</button>
+    </div>`;
+  if (!schedReminders.length) {
+    pinHTML += '<div class="empty">No reminders for this date.</div>';
+  } else {
+    schedReminders.forEach(r => {
+      pinHTML += `<div class="sched-pin" style="justify-content:space-between;align-items:center">
+        <span>• ${r.text}</span>
+        <button class="btn-icon" style="font-size:0.8rem;padding:0.1rem 0.3rem;flex-shrink:0" title="Dismiss" onclick="dismissReminder('${r.id}')">×</button>
+      </div>`;
+    });
+  }
   document.getElementById('sched-reminders').innerHTML = pinHTML + '</div>';
 }
 
