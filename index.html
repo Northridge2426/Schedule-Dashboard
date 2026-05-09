@@ -990,33 +990,50 @@ async function renderHistoryPage() {
     return;
   }
 
+  // Group by year-month (descending)
+  const groups = {};
+  _historyRows.forEach(b => {
+    const [yr, mo] = b.check_out_date.split('-');
+    const key = `${yr}-${mo}`;
+    if (!groups[key]) groups[key] = { label: `${MONTHS[+mo-1]} ${yr}`, rows: [] };
+    groups[key].rows.push(b);
+  });
+  const sortedKeys = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+
   let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:0.75rem">
     <button class="btn btn-secondary" onclick="exportHistoryCSV()">Export CSV</button>
   </div>`;
-  html += '<div style="overflow-x:auto"><table class="tbl"><thead><tr>' +
-    '<th>Dog</th><th>K</th><th>Check-In</th><th>Check-Out</th><th>Days</th><th>Wks</th><th>Flags</th><th>Invoice</th>' +
-    '</tr></thead><tbody>';
 
-  _historyRows.forEach(b => {
-    const inv = b.invoices?.[0] || null;
-    const flags = [
-      inv?.off_site_delivery     ? '<span class="badge badge-purple" style="font-size:0.6rem">Off-site</span>' : '',
-      inv?.outside_window_pickup ? '<span class="badge badge-orange" style="font-size:0.6rem">Out-win.</span>' : '',
-      inv?.grace_extension_applied ? '<span class="badge badge-blue" style="font-size:0.6rem">Grace</span>' : '',
-    ].filter(Boolean).join(' ');
-    const invStatus = inv ? (inv.status === 'paid' ? '<span class="badge badge-green">Paid</span>' : `<span class="badge badge-yellow">${inv.status}</span>`) : '—';
-    html += `<tr>
-      <td><strong>${b.dog_name}</strong></td>
-      <td>K${b.kennel_number}</td>
-      <td style="white-space:nowrap">${fmtDate(b.check_in_date)}${b.check_in_time ? ' ' + fmtTime(b.check_in_time) : ''}</td>
-      <td style="white-space:nowrap">${fmtDate(b.check_out_date)}${b.check_out_time ? ' ' + fmtTime(b.check_out_time) : ''}</td>
-      <td>${inv?.days_billed ?? '—'}</td>
-      <td>${inv?.weeks_billed ?? '—'}</td>
-      <td>${flags || '—'}</td>
-      <td>${invStatus}</td>
-    </tr>`;
+  sortedKeys.forEach(key => {
+    const g = groups[key];
+    html += `<div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin:1rem 0 0.4rem">${g.label}</div>`;
+    html += '<div style="overflow-x:auto"><table class="tbl"><thead><tr>' +
+      '<th>Dog</th><th>K</th><th>Check-In</th><th>Check-Out</th><th>Days</th><th>Wks</th><th>Flags</th><th>Invoice</th>' +
+      '</tr></thead><tbody>';
+    g.rows.forEach(b => {
+      const inv = b.invoices?.[0] || null;
+      const flags = [
+        inv?.off_site_delivery       ? '<span class="badge badge-purple" style="font-size:0.6rem">Off-site</span>' : '',
+        inv?.outside_window_pickup   ? '<span class="badge badge-orange" style="font-size:0.6rem">Out-win.</span>' : '',
+        inv?.grace_extension_applied ? '<span class="badge badge-blue"   style="font-size:0.6rem">Grace</span>'   : '',
+      ].filter(Boolean).join(' ');
+      const invStatus = inv
+        ? (inv.status === 'paid' ? '<span class="badge badge-green">Paid</span>' : `<span class="badge badge-yellow">${inv.status}</span>`)
+        : '—';
+      html += `<tr>
+        <td><strong>${b.dog_name}</strong></td>
+        <td>K${b.kennel_number}</td>
+        <td style="white-space:nowrap">${b.check_in_date ? fmtDate(b.check_in_date) : '—'}${b.check_in_time ? ' ' + fmtTime(b.check_in_time) : ''}</td>
+        <td style="white-space:nowrap">${fmtDate(b.check_out_date)}${b.check_out_time ? ' ' + fmtTime(b.check_out_time) : ''}</td>
+        <td>${inv?.days_billed ?? '—'}</td>
+        <td>${inv?.weeks_billed ?? '—'}</td>
+        <td>${flags || '—'}</td>
+        <td>${invStatus}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
   });
-  html += '</tbody></table></div>';
+
   document.getElementById('inv-page-body').innerHTML = html;
 }
 
