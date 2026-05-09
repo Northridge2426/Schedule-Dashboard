@@ -79,19 +79,23 @@
     .kennel-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem; }
     @media (min-width: 480px) { .kennel-grid { grid-template-columns: repeat(10, 1fr); } }
     .kennel-cell { border-radius: 8px; padding: 0.6rem 0.4rem; text-align: center; border: 2px solid transparent; cursor: default; }
-    .kennel-cell.dirty   { background: #fee2e2; border-color: #fca5a5; }
-    .kennel-cell.active  { background: #dcfce7; border-color: #86efac; cursor: pointer; }
+    .kennel-cell.dirty    { background: #fee2e2; border-color: #fca5a5; }
+    .kennel-cell.checkout { background: #dbeafe; border-color: #93c5fd; cursor: pointer; }
+    .kennel-cell.checkout:hover { border-color: #60a5fa; }
+    .kennel-cell.active   { background: #dcfce7; border-color: #86efac; cursor: pointer; }
     .kennel-cell.active:hover { border-color: #4ade80; }
-    .kennel-cell.upcoming{ background: #fef9c3; border-color: #fde047; }
-    .kennel-cell.empty   { background: #f8fafc; border-color: #e2e8f0; }
+    .kennel-cell.upcoming { background: #fef9c3; border-color: #fde047; }
+    .kennel-cell.empty    { background: #f8fafc; border-color: #e2e8f0; }
     .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
     .k-dog  { font-size: 0.75rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
     .k-date { font-size: 0.62rem; color: #94a3b8; margin-top: 0.2rem; }
     .k-action { font-size: 0.62rem; margin-top: 0.2rem; color: #15803d; font-weight: 500; }
-    .kennel-cell.dirty   .k-dog { color: #b91c1c; }
-    .kennel-cell.active  .k-dog { color: #15803d; }
+    .kennel-cell.dirty    .k-dog { color: #b91c1c; }
+    .kennel-cell.checkout .k-dog    { color: #1d4ed8; }
+    .kennel-cell.checkout .k-action { color: #1d4ed8; }
+    .kennel-cell.active   .k-dog { color: #15803d; }
     .kennel-cell.upcoming .k-dog { color: #92400e; }
-    .kennel-cell.empty   .k-dog { color: #cbd5e1; }
+    .kennel-cell.empty    .k-dog { color: #cbd5e1; }
 
     /* ---- Shopping tabs ---- */
     .shop-tab-bar { display: flex; gap: 0.25rem; }
@@ -213,6 +217,11 @@
     .tab-btn { flex: 1; padding: 0.55rem 0; background: none; border: none; color: #94a3b8; font-size: 0.85rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.15s; }
     .tab-btn.active { color: white; border-bottom-color: #3b82f6; }
     .tab-btn:hover:not(.active) { color: #cbd5e1; }
+    .more-dropdown { background: #253347; border-bottom: 1px solid #334155; display: none; }
+    .more-dropdown.open { display: block; }
+    .more-btn { display: block; width: 100%; padding: 0.65rem 1.5rem; text-align: left; background: none; border: none; border-bottom: 1px solid #334155; color: #94a3b8; font-size: 0.875rem; font-weight: 500; cursor: pointer; }
+    .more-btn:last-child { border-bottom: none; }
+    .more-btn:hover, .more-btn.active { color: white; background: rgba(255,255,255,0.05); }
 
     /* ---- Schedule view ---- */
     #schedule-view { max-width: 680px; margin: 0 auto; padding: 1.25rem; }
@@ -263,6 +272,12 @@
     <button class="tab-btn active" id="tab-overview" onclick="switchTab('overview')">Overview</button>
     <button class="tab-btn" id="tab-schedule" onclick="switchTab('schedule')">Schedule</button>
     <button class="tab-btn" id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
+    <button class="tab-btn" id="tab-more" onclick="toggleMoreMenu()">More ▾</button>
+  </div>
+  <div id="more-dropdown" class="more-dropdown">
+    <button class="more-btn" id="more-reminders" onclick="switchTab('reminders')">Reminders</button>
+    <button class="more-btn" id="more-shopping" onclick="switchTab('shopping')">Shopping</button>
+    <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
   </div>
 
   <!-- SCHEDULE VIEW -->
@@ -299,6 +314,49 @@
     </div>
   </div>
 
+
+  <!-- REMINDERS PAGE -->
+  <div id="reminders-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header">
+          <h2>Reminders</h2>
+          <button class="btn-add" onclick="openAddReminder()">+ Add</button>
+        </div>
+        <div class="card-body" id="reminders-body"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SHOPPING PAGE -->
+  <div id="shopping-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header">
+          <h2>Shopping</h2>
+          <div class="card-header-right">
+            <div class="shop-tab-bar">
+              <button class="shop-tab active" id="shop-tab-local" onclick="switchShopTab('local')">Local</button>
+              <button class="shop-tab" id="shop-tab-yellowknife" onclick="switchShopTab('yellowknife')">YK</button>
+              <button class="shop-tab" id="shop-tab-online" onclick="switchShopTab('online')">Online</button>
+            </div>
+            <button class="btn-add" onclick="openAddShopping()">+ Add</button>
+          </div>
+        </div>
+        <div class="card-body" id="shopping-body"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASKS PAGE -->
+  <div id="tasks-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header"><h2>Tasks &amp; Projects</h2></div>
+        <div class="card-body" id="tasks-body"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
 
   <main id="overview-view">
 
@@ -342,37 +400,6 @@
         <button class="btn-add" onclick="switchTab('invoices')">View all</button>
       </div>
       <div class="card-body" id="invoices-body"><div class="loading">Loading…</div></div>
-    </div>
-
-    <!-- Reminders -->
-    <div class="card">
-      <div class="card-header">
-        <h2>Reminders</h2>
-        <button class="btn-add" onclick="openAddReminder()">+ Add</button>
-      </div>
-      <div class="card-body" id="reminders-body"><div class="loading">Loading…</div></div>
-    </div>
-
-    <!-- Shopping -->
-    <div class="card">
-      <div class="card-header">
-        <h2>Shopping</h2>
-        <div class="card-header-right">
-          <div class="shop-tab-bar">
-            <button class="shop-tab active" id="shop-tab-local" onclick="switchShopTab('local')">Local</button>
-            <button class="shop-tab" id="shop-tab-yellowknife" onclick="switchShopTab('yellowknife')">YK</button>
-            <button class="shop-tab" id="shop-tab-online" onclick="switchShopTab('online')">Online</button>
-          </div>
-          <button class="btn-add" onclick="openAddShopping()">+ Add</button>
-        </div>
-      </div>
-      <div class="card-body" id="shopping-body"><div class="loading">Loading…</div></div>
-    </div>
-
-    <!-- Tasks (full width) -->
-    <div class="card full">
-      <div class="card-header"><h2>Tasks &amp; Projects</h2></div>
-      <div class="card-body" id="tasks-body"><div class="loading">Loading…</div></div>
     </div>
 
   </main>
@@ -603,14 +630,15 @@ function renderKennels(bookings, cleanings) {
   const grid = document.getElementById('kennel-grid');
   grid.innerHTML = '';
   for (let k = 1; k <= 10; k++) {
-    // Color priority: dirty > active > upcoming (≤7 days) > empty
-    const isDirty    = dirtyKennels.has(k);
-    const isActive   = !!activeByKennel[k];
-    const upcoming7  = pendingByKennel[k]
+    // Color priority: dirty > checkout_today > active > upcoming (≤7 days) > empty
+    const isDirty         = dirtyKennels.has(k);
+    const isActive        = !!activeByKennel[k];
+    const isCheckoutToday = isActive && activeByKennel[k].some(b => b.check_out_date === td);
+    const upcoming7       = pendingByKennel[k]
       ? pendingByKennel[k].some(b => b.check_in_date <= in7Str)
       : false;
 
-    const display = isDirty ? 'dirty' : isActive ? 'active' : upcoming7 ? 'upcoming' : 'empty';
+    const display = isDirty ? 'dirty' : isCheckoutToday ? 'checkout' : isActive ? 'active' : upcoming7 ? 'upcoming' : 'empty';
 
     const entries  = activeByKennel[k] || (upcoming7 ? pendingByKennel[k] : null) || null;
     const dogNames = entries ? entries.map(b => b.dog_name).join('+') : '—';
@@ -1386,15 +1414,34 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
+const MORE_TABS = ['reminders','shopping','tasks'];
+
 function switchTab(tab) {
-  ['overview','schedule','invoices'].forEach(t => {
+  const allViews = ['overview','schedule','invoices', ...MORE_TABS];
+  allViews.forEach(t => {
     const view = document.getElementById(t + '-view');
     if (view) view.style.display = t === tab ? '' : 'none';
+  });
+  ['overview','schedule','invoices'].forEach(t => {
     const btn = document.getElementById('tab-' + t);
     if (btn) btn.classList.toggle('active', t === tab);
   });
+
+  const isMoreTab = MORE_TABS.includes(tab);
+  const moreBtn = document.getElementById('tab-more');
+  if (moreBtn) moreBtn.classList.toggle('active', isMoreTab);
+  MORE_TABS.forEach(t => {
+    const el = document.getElementById('more-' + t);
+    if (el) el.classList.toggle('active', t === tab);
+  });
+  document.getElementById('more-dropdown').classList.remove('open');
+
   if (tab === 'schedule') renderSchedule();
   if (tab === 'invoices') setInvFilter(_invFilter);
+}
+
+function toggleMoreMenu() {
+  document.getElementById('more-dropdown').classList.toggle('open');
 }
 
 // ============================================================
