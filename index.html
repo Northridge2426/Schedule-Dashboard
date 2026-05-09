@@ -849,14 +849,20 @@ function renderReminders(reminders) {
   sorted.forEach(r => {
     const overdue  = r.target_date && r.target_date < td;
     const pinStyle = r.persistent ? 'background:#fffbeb;border-radius:6px;margin:0 -0.25rem;padding:0.35rem 0.25rem;' : '';
-    const pinColor = r.persistent ? '#f59e0b' : '#cbd5e1';
-    const datePart = r.target_date
-      ? `<div class="reminder-date ${overdue ? 'overdue' : ''}">${fmtDate(r.target_date)}</div>`
-      : `<div class="reminder-date" style="color:${pinColor}">📌</div>`;
+    // When pinned: always show 📌 in date column (replaces date); when not pinned: show date or blank
+    const datePart = r.persistent
+      ? `<div class="reminder-date" style="font-size:0.9rem">📌</div>`
+      : r.target_date
+        ? `<div class="reminder-date ${overdue ? 'overdue' : ''}">${fmtDate(r.target_date)}</div>`
+        : `<div class="reminder-date" style="color:#cbd5e1">—</div>`;
+    // Pin button: amber background when pinned so state is obvious regardless of emoji color
+    const pinBtnStyle = r.persistent
+      ? 'background:#fef3c7;color:#92400e;border-radius:5px;'
+      : '';
     html += `<div class="reminder-row" style="${pinStyle}">
       ${datePart}
       <div class="reminder-text">${r.text}</div>
-      <button class="btn-icon" title="${r.persistent ? 'Unpin' : 'Pin to top'}" onclick="toggleReminderPin('${r.id}',${r.persistent})" style="color:${pinColor}">📌</button>
+      <button class="btn-icon" title="${r.persistent ? 'Unpin' : 'Pin to top'}" onclick="toggleReminderPin('${r.id}',${r.persistent})" style="${pinBtnStyle}">📌</button>
       <button class="btn-icon" title="Edit" onclick="openEditReminder('${r.id}')">✏</button>
       <button class="btn-icon" title="Dismiss" onclick="dismissReminder('${r.id}')">×</button>
     </div>`;
