@@ -589,6 +589,11 @@ function fmtBilling(days, weeks) {
 let _modalSaveFn = null;
 
 function openModal(title, bodyHTML, onSave, saveLabel = 'Save') {
+  // Restore default footer (openLogCheckout/etc. overwrite modal-footer with custom buttons,
+  // which destroys #modal-save-btn — restore it so subsequent openModal calls work)
+  document.getElementById('modal-footer').innerHTML =
+    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="modal-save-btn">Save</button>';
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = bodyHTML;
   const saveBtn = document.getElementById('modal-save-btn');
