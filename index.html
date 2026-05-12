@@ -477,6 +477,7 @@
         <span class="kc-month-label" id="kc-month-label">—</span>
         <button onclick="kcShift(1)" title="Next month">›</button>
         <button onclick="kcGoToday()" title="Jump to current month">Today</button>
+        <button onclick="openKcExport()" title="Export to CSV">Export CSV</button>
       </div>
       <div class="kc-legend">
         <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#fef9c3"></span>Active</span>
@@ -1704,6 +1705,228 @@ function renderKennelCalendar() {
       if (r) r.scrollIntoView({ block: 'center' });
     }, 30);
   }
+}
+
+// ============================================================
+// KENNEL CALENDAR — CSV EXPORT
+// ============================================================
+function openKcExport() {
+  const month = _calMonth || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const mStart = kcDateStr(new Date(month.getFullYear(), month.getMonth(), 1));
+  const mEnd   = kcDateStr(new Date(month.getFullYear(), month.getMonth() + 1, 0));
+  const yStart = month.getFullYear() + '-01-01';
+  const today  = todayStr();
+
+  const body = `
+    <div class="form-field">
+      <label>Format</label>
+      <select id="kcx-format">
+        <option value="grid" selected>Grid — date × kennel (matches your Excel layout)</option>
+        <option value="list">List — one row per booking</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label>Date range</label>
+      <select id="kcx-range" onchange="kcxToggleCustom(this)">
+        <option value="month" selected>Currently viewed month (${kcFmtMonth(month)})</option>
+        <option value="ytd">Year-to-date (${yStart} → ${today})</option>
+        <option value="all">All bookings (full history)</option>
+        <option value="custom">Custom range…</option>
+      </select>
+    </div>
+    <div class="form-row-2" id="kcx-custom" style="display:none">
+      <div class="form-field"><label>From</label><input type="date" id="kcx-from" value="${mStart}"></div>
+      <div class="form-field"><label>To</label><input type="date" id="kcx-to" value="${mEnd}"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="kcx-include-completed" checked><label for="kcx-include-completed">Include completed bookings</label></div>
+      <div class="form-check"><input type="checkbox" id="kcx-include-cancelled"><label for="kcx-include-cancelled">Include cancelled bookings</label></div>
+      <div class="form-check"><input type="checkbox" id="kcx-include-cleanings" checked><label for="kcx-include-cleanings">Mark scheduled cleanings (Grid only)</label></div>
+    </div>
+    <div class="form-hint">Saves a CSV you can open in Excel. (CSV doesn't carry colors — you'd re-color in Excel if you want the original status coding.)</div>`;
+
+  openModal('Export Kennel Calendar to CSV', body, () => kcxDoExport(month), 'Export');
+}
+
+function kcxToggleCustom(sel) {
+  document.getElementById('kcx-custom').style.display = sel.value === 'custom' ? '' : 'none';
+}
+
+function kcxResolveRange(month) {
+  const range = document.getElementById('kcx-range').value;
+  if (range === 'month') {
+    const from = kcDateStr(new Date(month.getFullYear(), month.getMonth(), 1));
+    const to   = kcDateStr(new Date(month.getFullYear(), month.getMonth() + 1, 0));
+    return { from, to, label: kcFmtMonth(month).toLowerCase().replace(/\s+/g, '-') };
+  }
+  if (range === 'ytd') {
+    return { from: new Date().getFullYear() + '-01-01', to: todayStr(), label: 'ytd' };
+  }
+  if (range === 'all') {
+    // Use the min/max from bookings as the range
+    let mn = null, mx = null;
+    _bookings.forEach(b => {
+      if (b.check_in_date  && (!mn || b.check_in_date  < mn)) mn = b.check_in_date;
+      if (b.check_out_date && (!mx || b.check_out_date > mx)) mx = b.check_out_date;
+    });
+    return { from: mn || todayStr(), to: mx || todayStr(), label: 'all' };
+  }
+  // custom
+  const from = document.getElementById('kcx-from').value;
+  const to   = document.getElementById('kcx-to').value;
+  return { from, to, label: 'custom-' + from + '-to-' + to };
+}
+
+function kcxCsvEscape(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function kcxBuildGridCsv(from, to, opts) {
+  if (!from || !to || from > to) { showToast('Invalid date range', 'error'); return null; }
+
+  // Filter bookings by status flags
+  const bookingsIn = _bookings.filter(b => {
+    if (!b.check_in_date || !b.check_out_date) return false;
+    if (b.status === 'cancelled' && !opts.includeCancelled) return false;
+    if (b.status === 'completed' && !opts.includeCompleted) return false;
+    if (b.check_out_date < from || b.check_in_date > to) return false;
+    return true;
+  });
+
+  // Build occupancy: kennel|date -> [bookings]
+  const occ = {};
+  bookingsIn.forEach(b => {
+    const startD = b.check_in_date < from ? from : b.check_in_date;
+    const endD   = b.check_out_date > to ? to : b.check_out_date;
+    const start  = new Date(startD + 'T00:00:00');
+    const end    = new Date(endD + 'T00:00:00');
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const key = `${b.kennel_number}|${kcDateStr(d)}`;
+      if (!occ[key]) occ[key] = [];
+      occ[key].push(b);
+    }
+  });
+
+  // Cleanings map
+  const cleaningMap = {};
+  if (opts.includeCleanings) {
+    _cleanings.forEach(c => {
+      if (!c.scheduled_date) return;
+      if (c.scheduled_date < from || c.scheduled_date > to) return;
+      cleaningMap[`${c.kennel_number}|${c.scheduled_date}`] = c;
+    });
+  }
+
+  // Blocked
+  const blockedSet = new Set();
+  (_kennels || []).forEach(k => { if (k.blocked_off) blockedSet.add(k.kennel_number); });
+
+  // Header
+  const header = ['Date'];
+  for (let k = 1; k <= 10; k++) header.push('K' + k);
+  const rows = [header];
+
+  // Day-of-week formatter
+  const dow = d => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+
+  const fromD = new Date(from + 'T00:00:00');
+  const toD   = new Date(to + 'T00:00:00');
+  for (let d = new Date(fromD); d <= toD; d.setDate(d.getDate() + 1)) {
+    const ds = kcDateStr(d);
+    const dateLabel = `${dow(d)} ${ds}`;
+    const row = [dateLabel];
+    for (let k = 1; k <= 10; k++) {
+      const arr = occ[`${k}|${ds}`];
+      const cln = cleaningMap[`${k}|${ds}`];
+      let cell = '';
+      if (arr && arr.length) {
+        const names = arr.map(b => b.dog_name).join('+');
+        // Annotate status when not active/pending (so user can see at a glance)
+        const primaryStatus = arr[0].status;
+        if (primaryStatus === 'completed') cell = names + ' (completed)';
+        else if (primaryStatus === 'cancelled') cell = names + ' (cancelled)';
+        else cell = names;
+      } else if (blockedSet.has(k)) {
+        const ken = (_kennels || []).find(x => x.kennel_number === k);
+        cell = ken && ken.block_reason ? 'Blocked: ' + ken.block_reason : 'Blocked';
+      } else if (cln) {
+        cell = 'Clean (scheduled)';
+      }
+      row.push(cell);
+    }
+    rows.push(row);
+  }
+  return rows.map(r => r.map(kcxCsvEscape).join(',')).join('\n');
+}
+
+function kcxBuildListCsv(from, to, opts) {
+  if (!from || !to || from > to) { showToast('Invalid date range', 'error'); return null; }
+
+  const householdById = {};
+  (_households || []).forEach(h => { householdById[h.id] = h.owner_name; });
+
+  const bookingsIn = _bookings.filter(b => {
+    if (!b.check_in_date || !b.check_out_date) return false;
+    if (b.status === 'cancelled' && !opts.includeCancelled) return false;
+    if (b.status === 'completed' && !opts.includeCompleted) return false;
+    if (b.check_out_date < from || b.check_in_date > to) return false;
+    return true;
+  });
+  bookingsIn.sort((a, b) =>
+    a.check_in_date === b.check_in_date
+      ? a.kennel_number - b.kennel_number
+      : a.check_in_date.localeCompare(b.check_in_date)
+  );
+
+  const header = ['Dog','Kennel','Check-In Date','Check-In Time','Check-Out Date','Check-Out Time','Days','Status','Owner','Notes'];
+  const rows = [header];
+  bookingsIn.forEach(b => {
+    const days = (b.check_in_date && b.check_out_date) ? Math.max(1, diffDays(b.check_in_date, b.check_out_date)) : '';
+    rows.push([
+      b.dog_name,
+      'K' + b.kennel_number,
+      b.check_in_date || '',
+      b.check_in_time ? b.check_in_time.slice(0,5) : '',
+      b.check_out_date || '',
+      b.check_out_time ? b.check_out_time.slice(0,5) : '',
+      days,
+      b.status || '',
+      b.household_id ? (householdById[b.household_id] || '') : '',
+      b.notes || '',
+    ]);
+  });
+  return rows.map(r => r.map(kcxCsvEscape).join(',')).join('\n');
+}
+
+async function kcxDoExport(month) {
+  const fmt = document.getElementById('kcx-format').value;
+  const { from, to, label } = kcxResolveRange(month);
+  const opts = {
+    includeCompleted: document.getElementById('kcx-include-completed').checked,
+    includeCancelled: document.getElementById('kcx-include-cancelled').checked,
+    includeCleanings: document.getElementById('kcx-include-cleanings').checked,
+  };
+  const csv = fmt === 'grid'
+    ? kcxBuildGridCsv(from, to, opts)
+    : kcxBuildListCsv(from, to, opts);
+  if (!csv) return;
+
+  // BOM so Excel opens UTF-8 correctly
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `kennel-calendar-${fmt}-${label}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  closeModal();
+  showToast('Exported ' + a.download);
 }
 
 // ============================================================
