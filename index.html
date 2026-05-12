@@ -504,6 +504,14 @@ function nextWorkday(dateStr) {
 function diffDays(d1, d2) {
   return Math.round((new Date(d2) - new Date(d1)) / 86400000);
 }
+function fmtBilling(days, weeks) {
+  if (!days && days !== 0) return '—';
+  if (!weeks) return `${days} day${days !== 1 ? 's' : ''}`;
+  const rem     = days - weeks * 7;
+  const weekStr = `${weeks} week${weeks !== 1 ? 's' : ''}`;
+  const dayStr  = rem > 0 ? ` + ${rem} day${rem !== 1 ? 's' : ''}` : '';
+  return `${days} days (${weekStr}${dayStr})`;
+}
 
 // ============================================================
 // MODAL
@@ -988,8 +996,7 @@ function renderInvoicePage() {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem 1rem;font-size:0.82rem;color:#475569;margin-bottom:0.5rem">
         <div>Check-in: ${b ? fmtDate(b.check_in_date) + (b.check_in_time ? ' ' + fmtTime(b.check_in_time) : '') : '—'}</div>
         <div>Check-out: ${b ? fmtDate(b.check_out_date) + (b.check_out_time ? ' ' + fmtTime(b.check_out_time) : '') : '—'}</div>
-        <div>Days billed: <strong>${i.days_billed}</strong></div>
-        <div>Weeks billed: <strong>${i.weeks_billed ?? '—'}</strong></div>
+        <div>Billed: <strong>${fmtBilling(i.days_billed, i.weeks_billed)}</strong></div>
         <div>Invoice date: ${fmtDate(i.invoice_date)}</div>
       </div>
       <div style="margin-bottom:0.5rem">
@@ -1485,8 +1492,7 @@ function openInvoiceDetail(id) {
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Kennel</div><strong>K${b ? b.kennel_number : '—'}</strong></div>
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Check-in</div>${b ? fmtDate(b.check_in_date) + (b.check_in_time ? ' at ' + fmtTime(b.check_in_time) : '') : '—'}</div>
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Check-out</div>${b ? fmtDate(b.check_out_date) + (b.check_out_time ? ' at ' + fmtTime(b.check_out_time) : '') : '—'}</div>
-      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Days billed</div>${i.days_billed}</div>
-      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Weeks billed</div>${i.weeks_billed ?? '—'}</div>
+      <div style="grid-column:1/-1"><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Billed</div><strong>${fmtBilling(i.days_billed, i.weeks_billed)}</strong></div>
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Invoice date</div>${fmtDate(i.invoice_date)}</div>
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Status</div>${statusBadge}</div>
     </div>
