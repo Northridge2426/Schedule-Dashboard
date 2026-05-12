@@ -187,6 +187,48 @@
     .modal-body { padding: 1.25rem; }
     .modal-footer { padding: 0.875rem 1.25rem; border-top: 1px solid #f1f5f9; display: flex; gap: 0.75rem; justify-content: flex-end; position: sticky; bottom: 0; background: white; }
 
+    /* ---- Kennel Calendar overlay ---- */
+    .kc-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 60; display: none; align-items: center; justify-content: center; padding: 0; }
+    .kc-overlay.open { display: flex; }
+    .kc-box { background: white; width: 100%; height: 100%; max-width: 1400px; max-height: 100vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
+    @media (min-width: 640px) { .kc-box { border-radius: 14px; height: 92vh; max-height: 92vh; margin: 1rem; } }
+    .kc-header { display: flex; align-items: center; justify-content: space-between; padding: 0.875rem 1.25rem; border-bottom: 1px solid #e2e8f0; gap: 0.75rem; flex-wrap: wrap; }
+    .kc-title { font-size: 1rem; font-weight: 700; color: #1e293b; }
+    .kc-nav { display: flex; align-items: center; gap: 0.4rem; }
+    .kc-nav button { background: #f1f5f9; border: 1px solid #cbd5e1; color: #1e293b; padding: 0.35rem 0.7rem; border-radius: 7px; font-size: 0.85rem; cursor: pointer; font-weight: 500; }
+    .kc-nav button:hover { background: #e2e8f0; }
+    .kc-nav .kc-month-label { font-size: 0.95rem; font-weight: 700; color: #1e293b; padding: 0 0.5rem; min-width: 8.5rem; text-align: center; }
+    .kc-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #64748b; padding: 0 0.4rem; line-height: 1; }
+    .kc-close:hover { color: #1e293b; }
+    .kc-legend { display: flex; gap: 0.6rem; font-size: 0.7rem; color: #64748b; flex-wrap: wrap; }
+    .kc-legend-item { display: inline-flex; align-items: center; gap: 0.25rem; }
+    .kc-legend-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.1); }
+
+    .kc-table-wrap { flex: 1; overflow: auto; }
+    .kc-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 720px; font-size: 0.78rem; }
+    .kc-table th, .kc-table td { padding: 0; border-bottom: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; }
+    .kc-table th { background: #f8fafc; font-weight: 700; color: #475569; text-align: center; padding: 0.55rem 0.25rem; position: sticky; top: 0; z-index: 2; }
+    .kc-table th.kc-corner { left: 0; z-index: 3; }
+    .kc-table td.kc-date-cell { background: #f8fafc; font-weight: 600; color: #475569; padding: 0.35rem 0.6rem; white-space: nowrap; position: sticky; left: 0; z-index: 1; text-align: left; min-width: 92px; }
+    .kc-table td.kc-date-cell.kc-weekend { color: #94a3b8; }
+    .kc-table tr.kc-today td.kc-date-cell { background: #fef3c7; color: #92400e; }
+    .kc-table tr.kc-today td.kc-cell { box-shadow: inset 0 1px 0 #fbbf24, inset 0 -1px 0 #fbbf24; }
+    .kc-cell { height: 32px; min-width: 56px; cursor: pointer; padding: 0.15rem 0.3rem; vertical-align: middle; font-size: 0.7rem; font-weight: 600; line-height: 1.1; text-align: center; transition: filter 0.1s; }
+    .kc-cell:hover { filter: brightness(0.96); }
+    .kc-cell.kc-empty { background: #ffffff; color: #cbd5e1; }
+    .kc-cell.kc-empty:hover { background: #f1f5f9; color: #64748b; }
+    .kc-cell.kc-empty::before { content: ''; }
+    .kc-cell.kc-active   { background: #fef9c3; color: #92400e; }
+    .kc-cell.kc-pending  { background: #dcfce7; color: #15803d; }
+    .kc-cell.kc-completed{ background: #f1f5f9; color: #64748b; }
+    .kc-cell.kc-checkout { background: #dbeafe; color: #1d4ed8; }
+    .kc-cell.kc-cancelled{ background: #fef2f2; color: #991b1b; text-decoration: line-through; }
+    .kc-cell.kc-blocked  { background: repeating-linear-gradient(45deg, #f1f5f9 0 6px, #e2e8f0 6px 12px); color: #64748b; cursor: pointer; font-size: 0.62rem; }
+    .kc-cell.kc-span-mid { color: transparent; }
+    .kc-cell.kc-clean-marker { position: relative; }
+    .kc-cell.kc-clean-marker::after { content: '🧹'; position: absolute; top: 1px; right: 3px; font-size: 0.6rem; line-height: 1; }
+    .kc-cell-shared { display: inline-block; font-size: 0.55rem; margin-left: 2px; vertical-align: super; }
+
     /* ---- Form elements (in modal) ---- */
     .form-field { margin-bottom: 1rem; }
     .form-field:last-child { margin-bottom: 0; }
@@ -366,6 +408,7 @@
         <h2>Kennel Status</h2>
         <div class="card-header-right">
           <span id="cap-badge" class="badge badge-gray"></span>
+          <button class="btn-add" onclick="openKennelCalendar()" title="Expanded calendar view">Expand ⤢</button>
           <button class="btn-add" onclick="openAddBooking()">+ Booking</button>
         </div>
       </div>
@@ -419,6 +462,33 @@
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="modal-save-btn">Save</button>
     </div>
+  </div>
+</div>
+
+<!-- ======================================================
+     KENNEL CALENDAR (Expanded view)
+     ====================================================== -->
+<div id="kc-overlay" class="kc-overlay" onclick="kcHandleOverlayClick(event)">
+  <div class="kc-box">
+    <div class="kc-header">
+      <div class="kc-title">Kennel Calendar</div>
+      <div class="kc-nav">
+        <button onclick="kcShift(-1)" title="Previous month">‹</button>
+        <span class="kc-month-label" id="kc-month-label">—</span>
+        <button onclick="kcShift(1)" title="Next month">›</button>
+        <button onclick="kcGoToday()" title="Jump to current month">Today</button>
+      </div>
+      <div class="kc-legend">
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#fef9c3"></span>Active</span>
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#dcfce7"></span>Pending</span>
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#dbeafe"></span>Checkout</span>
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#f1f5f9"></span>Completed</span>
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:repeating-linear-gradient(45deg,#f1f5f9 0 4px,#e2e8f0 4px 8px)"></span>Blocked</span>
+        <span class="kc-legend-item">🧹 Cleaning</span>
+      </div>
+      <button class="kc-close" onclick="closeKennelCalendar()" aria-label="Close">×</button>
+    </div>
+    <div class="kc-table-wrap" id="kc-table-wrap"></div>
   </div>
 </div>
 
@@ -1352,7 +1422,7 @@ async function unblockKennel(kennelNum) {
 // ============================================================
 // ACTION: ADD BOOKING
 // ============================================================
-function openAddBooking(defaultKennel = null) {
+function openAddBooking(defaultKennel = null, defaultDate = null) {
   const householdOptions = _households.map(h =>
     `<option value="${h.id}">${h.owner_name}</option>`
   ).join('');
@@ -1377,7 +1447,7 @@ function openAddBooking(defaultKennel = null) {
       <label>New owner name *</label><input type="text" id="f-new-owner" placeholder="Owner's name">
     </div>
     <div class="form-row-2">
-      <div class="form-field"><label>Check-in date *</label><input type="date" id="f-cin-date"></div>
+      <div class="form-field"><label>Check-in date *</label><input type="date" id="f-cin-date" value="${defaultDate || ''}"></div>
       <div class="form-field"><label>Check-in time</label><input type="time" id="f-cin-time"></div>
     </div>
     <div class="form-row-2">
@@ -1439,6 +1509,196 @@ function openAddBooking(defaultKennel = null) {
 
 function toggleNewOwner(sel) {
   document.getElementById('f-new-owner-field').style.display = sel.value === 'new' ? '' : 'none';
+}
+
+// ============================================================
+// KENNEL CALENDAR (Expanded view)
+// ============================================================
+let _calMonth = null; // Date pointing at the 1st of the displayed month
+
+function openKennelCalendar() {
+  if (!_calMonth) {
+    const t = new Date();
+    _calMonth = new Date(t.getFullYear(), t.getMonth(), 1);
+  }
+  document.getElementById('kc-overlay').classList.add('open');
+  renderKennelCalendar();
+}
+
+function closeKennelCalendar() {
+  document.getElementById('kc-overlay').classList.remove('open');
+}
+
+function kcHandleOverlayClick(e) {
+  if (e.target === document.getElementById('kc-overlay')) closeKennelCalendar();
+}
+
+function kcShift(delta) {
+  _calMonth = new Date(_calMonth.getFullYear(), _calMonth.getMonth() + delta, 1);
+  renderKennelCalendar();
+}
+
+function kcGoToday() {
+  const t = new Date();
+  _calMonth = new Date(t.getFullYear(), t.getMonth(), 1);
+  renderKennelCalendar();
+  // Scroll today's row into view
+  setTimeout(() => {
+    const r = document.querySelector('#kc-table-wrap tr.kc-today');
+    if (r) r.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, 50);
+}
+
+function kcFmtMonth(d) {
+  return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function kcFmtRow(d) {
+  return d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function kcDateStr(d) {
+  // YYYY-MM-DD in local time
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function renderKennelCalendar() {
+  const month = _calMonth;
+  document.getElementById('kc-month-label').textContent = kcFmtMonth(month);
+
+  const year = month.getFullYear();
+  const mIdx = month.getMonth();
+  const daysInMonth = new Date(year, mIdx + 1, 0).getDate();
+  const monthStart = kcDateStr(new Date(year, mIdx, 1));
+  const monthEnd   = kcDateStr(new Date(year, mIdx, daysInMonth));
+  const today      = todayStr();
+
+  // Index bookings that intersect this month
+  // For each kennel and date, collect ALL bookings that occupy it (shared kennels = multiple)
+  const occupancy = {}; // key `${kennel}|${dateStr}` -> [booking, ...]
+  const startOfStay = {}; // key `${kennel}|${bookingId}` -> first visible date
+  _bookings.forEach(b => {
+    if (!b.check_in_date || !b.check_out_date) return;
+    if (b.status === 'cancelled') return;
+    // Skip if entire stay falls outside this month
+    if (b.check_out_date < monthStart || b.check_in_date > monthEnd) return;
+    const startD = b.check_in_date < monthStart ? monthStart : b.check_in_date;
+    const endD   = b.check_out_date > monthEnd ? monthEnd : b.check_out_date;
+    const start = new Date(startD + 'T00:00:00');
+    const end   = new Date(endD + 'T00:00:00');
+    let first = true;
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const ds = kcDateStr(d);
+      const key = `${b.kennel_number}|${ds}`;
+      if (!occupancy[key]) occupancy[key] = [];
+      occupancy[key].push(b);
+      if (first) { startOfStay[`${b.kennel_number}|${b.id}`] = ds; first = false; }
+    }
+  });
+  // Sort each cell's bookings so the most-meaningful one drives status/click
+  const statusRank = s => s === 'active' ? 4 : s === 'pending' ? 3 : s === 'completed' ? 2 : s === 'cancelled' ? 1 : 0;
+  Object.values(occupancy).forEach(arr => arr.sort((a, b) => statusRank(b.status) - statusRank(a.status)));
+
+  // Index cleanings by `${kennel}|${date}`
+  const cleaningMap = {};
+  _cleanings.forEach(c => {
+    if (!c.scheduled_date) return;
+    if (c.scheduled_date < monthStart || c.scheduled_date > monthEnd) return;
+    cleaningMap[`${c.kennel_number}|${c.scheduled_date}`] = c;
+  });
+
+  // Blocked kennels (no per-date — applies whenever kennel is otherwise empty)
+  const blockedSet = new Set();
+  (_kennels || []).forEach(k => { if (k.blocked_off) blockedSet.add(k.kennel_number); });
+
+  // Build table
+  let html = '<table class="kc-table"><thead><tr><th class="kc-corner kc-date-cell"></th>';
+  for (let k = 1; k <= 10; k++) html += `<th>K${k}</th>`;
+  html += '</tr></thead><tbody>';
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, mIdx, day);
+    const ds = kcDateStr(d);
+    const dow = d.getDay();
+    const isWeekend = (dow === 0 || dow === 6);
+    const isToday = (ds === today);
+    html += `<tr class="${isToday ? 'kc-today' : ''}">`;
+    html += `<td class="kc-date-cell${isWeekend ? ' kc-weekend' : ''}">${kcFmtRow(d)}</td>`;
+    for (let k = 1; k <= 10; k++) {
+      const key = `${k}|${ds}`;
+      const bArr = occupancy[key];
+      const b = bArr ? bArr[0] : null; // primary booking drives styling/click
+      const c = cleaningMap[key];
+      let cls = 'kc-cell';
+      let label = '';
+      let attrs = '';
+      if (b) {
+        const isCheckoutDay = (b.check_out_date === ds);
+        const statusCls = b.status === 'active'
+          ? (isCheckoutDay ? 'kc-checkout' : 'kc-active')
+          : b.status === 'pending'   ? 'kc-pending'
+          : b.status === 'completed' ? 'kc-completed'
+          : 'kc-cell';
+        cls += ' ' + statusCls;
+        // "First day" of any booking in this cell = show names
+        const showName = bArr.some(bk => startOfStay[`${k}|${bk.id}`] === ds);
+        if (!showName) cls += ' kc-span-mid';
+        const sharedFlag = bArr.some(bk => bk.notes && bk.notes.toLowerCase().includes('shared kennel'));
+        const names = bArr.map(bk => bk.dog_name).join('+');
+        label = showName ? `${names}${sharedFlag ? '<span class="kc-cell-shared" title="Shared kennel">⚠</span>' : ''}` : '·';
+        const titleNames = bArr.map(bk => `${bk.dog_name} (${bk.status})`).join(', ');
+        attrs = `data-booking="${b.id}" title="K${k} — ${titleNames}"`;
+      } else if (blockedSet.has(k)) {
+        cls += ' kc-blocked';
+        label = 'Blocked';
+        attrs = `data-blocked="${k}"`;
+      } else {
+        cls += ' kc-empty';
+        label = '+';
+        attrs = `data-add-kennel="${k}" data-add-date="${ds}"`;
+      }
+      if (c) cls += ' kc-clean-marker';
+      html += `<td class="${cls}" ${attrs}>${label}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+
+  const wrap = document.getElementById('kc-table-wrap');
+  wrap.innerHTML = html;
+
+  // Wire up clicks
+  wrap.querySelectorAll('.kc-cell').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const bId = cell.getAttribute('data-booking');
+      const addK = cell.getAttribute('data-add-kennel');
+      const blockedK = cell.getAttribute('data-blocked');
+      if (bId) {
+        const b = _bookings.find(x => x.id === bId);
+        if (b) { closeKennelCalendar(); openLogCheckout(b); }
+      } else if (addK) {
+        const ds = cell.getAttribute('data-add-date');
+        closeKennelCalendar();
+        openAddBooking(parseInt(addK), ds);
+      } else if (blockedK) {
+        const kn = parseInt(blockedK);
+        const ken = (_kennels || []).find(x => x.kennel_number === kn);
+        closeKennelCalendar();
+        openBlockedKennelModal(kn, ken ? ken.block_reason : null);
+      }
+    });
+  });
+
+  // Scroll today's row into view on open if visible
+  if (document.querySelector('#kc-table-wrap tr.kc-today')) {
+    setTimeout(() => {
+      const r = document.querySelector('#kc-table-wrap tr.kc-today');
+      if (r) r.scrollIntoView({ block: 'center' });
+    }, 30);
+  }
 }
 
 // ============================================================
