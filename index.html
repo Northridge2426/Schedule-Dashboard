@@ -737,9 +737,6 @@ function renderKennels(bookings, cleanings, kennels) {
     const isDirty         = dirtyKennels.has(k);
     const isActive        = !!activeByKennel[k];
     const isCheckoutToday = isActive && activeByKennel[k].some(b => b.check_out_date === td);
-    const upcoming7       = pendingByKennel[k]
-      ? pendingByKennel[k].some(b => b.check_in_date <= in7Str)
-      : false;
 
     // Only the NEXT (earliest) pending booking for this kennel
     const nextPending = pendingByKennel[k]
