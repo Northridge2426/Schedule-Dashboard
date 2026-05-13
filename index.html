@@ -85,6 +85,8 @@
     .kennel-cell.active   { background: #fef9c3; border-color: #fde047; cursor: pointer; }
     .kennel-cell.active:hover { border-color: #facc15; }
     .kennel-cell.upcoming { background: #dcfce7; border-color: #86efac; }
+    .kennel-cell.ready    { background: #dcfce7; border-color: #86efac; cursor: pointer; }
+    .kennel-cell.ready:hover { border-color: #4ade80; }
     .kennel-cell.empty    { background: #f8fafc; border-color: #e2e8f0; }
     .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
     .k-dog  { font-size: 0.75rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
@@ -95,6 +97,7 @@
     .kennel-cell.checkout .k-action { color: #1d4ed8; }
     .kennel-cell.active   .k-dog { color: #92400e; }
     .kennel-cell.upcoming .k-dog { color: #15803d; }
+    .kennel-cell.ready    .k-dog { color: #15803d; }
     .kennel-cell.empty    .k-dog { color: #cbd5e1; }
 
     /* ---- Shopping tabs ---- */
@@ -320,6 +323,7 @@
     <button class="more-btn" id="more-reminders" onclick="switchTab('reminders')">Reminders</button>
     <button class="more-btn" id="more-shopping" onclick="switchTab('shopping')">Shopping</button>
     <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
+    <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
   </div>
 
   <!-- SCHEDULE VIEW -->
@@ -396,6 +400,19 @@
       <div class="card">
         <div class="card-header"><h2>Tasks &amp; Projects</h2></div>
         <div class="card-body" id="tasks-body"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CUSTOMERS PAGE -->
+  <div id="customers-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header">
+          <h2>Customers</h2>
+          <button class="btn-add" onclick="openEditCustomer(null)">+ Add Customer</button>
+        </div>
+        <div class="card-body" id="customers-body"><div class="loading">Loading…</div></div>
       </div>
     </div>
   </div>
@@ -506,7 +523,8 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // MODULE STATE
 // ============================================================
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
-    _shopping = [], _invoices = [], _households = [], _kennels = [];
+    _shopping = [], _invoices = [], _households = [], _kennels = [],
+    _dogs = [];
 let _completions = new Set();
 let _shopTab   = 'local';
 let _invFilter = 'all';
@@ -714,7 +732,7 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').not('status','in','("completed","skipped")').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
@@ -723,6 +741,7 @@ async function loadAll() {
     db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time)'),
     db.from('households').select('*').order('owner_name'),
     db.from('kennels').select('*').order('kennel_number'),
+    db.from('dogs').select('*').order('name'),
   ]);
 
   _bookings   = rBook.data   || [];
@@ -733,6 +752,7 @@ async function loadAll() {
   _invoices   = rInv.data    || [];
   _households = rHouse.data  || [];
   _kennels    = rKen.data    || [];
+  _dogs       = rDogs.data   || [];
 
   renderAll();
 }
@@ -808,10 +828,15 @@ function renderKennels(bookings, cleanings, kennels) {
       : null;
     const upcoming7 = nextPending ? nextPending.check_in_date <= in7Str : false;
 
-    const display   = isDirty ? 'dirty' : isCheckoutToday ? 'checkout' : isActive ? 'active' : upcoming7 ? 'upcoming' : 'empty';
     const isBlocked = !isActive && !isDirty && kennelMap[k]?.blocked_off;
+    const display   = isDirty ? 'dirty'
+                    : isCheckoutToday ? 'checkout'
+                    : isActive ? 'active'
+                    : upcoming7 ? 'upcoming'
+                    : isBlocked ? 'empty'
+                    : 'ready';  // clean + idle = green "Ready"
 
-    // Dog name: active dog > last completed (while dirty) > next pending (once clean) > blocked label
+    // Dog name: active dog > last completed (while dirty) > next pending (once clean) > blocked label > Ready
     let dogName, dateLabel, actionLabel;
     if (isActive) {
       dogName     = activeByKennel[k].map(b => b.dog_name).join('+');
@@ -833,7 +858,8 @@ function renderKennels(bookings, cleanings, kennels) {
       dateLabel   = kennelMap[k].block_reason || '';
       actionLabel = '';
     } else {
-      dogName = '—'; dateLabel = ''; actionLabel = '';
+      // Clean + idle (no booking in next 7 days)
+      dogName = 'Ready'; dateLabel = ''; actionLabel = 'tap to add booking';
     }
 
     const cell = document.createElement('div');
@@ -853,6 +879,9 @@ function renderKennels(bookings, cleanings, kennels) {
       // Tap upcoming kennel to check in the next dog
       cell.style.cursor = 'pointer';
       cell.onclick = () => openLogCheckin(nextPending);
+    } else if (display === 'ready') {
+      cell.style.cursor = 'pointer';
+      cell.onclick = () => openVacantKennelModal(k);
     } else if (display === 'empty') {
       cell.style.cursor = 'pointer';
       if (isBlocked) {
@@ -1287,7 +1316,15 @@ function openLogCheckout(booking) {
   const b = _bookings.find(x => x.id === booking.id) || booking;
   const isCompleted = b.status === 'completed';
 
-  const body = `
+  // Group cascade notice (multi-dog booking)
+  const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id) : [b];
+  const groupNotice = group.length > 1
+    ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
+         <strong>Group booking</strong> — changes apply to all ${group.length} dogs: ${group.map(g => `${g.dog_name} (K${g.kennel_number})`).join(', ')}
+       </div>`
+    : '';
+
+  const body = groupNotice + `
     <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
@@ -1325,13 +1362,22 @@ async function manageBookingSave(bookingId) {
     const outDate = document.getElementById('f-out-date').value || null;
     const outTime = document.getElementById('f-out-time').value || null;
 
-    const { error } = await db.from('bookings').update({
+    // Cascade dates/times to all bookings in the same group
+    const b = _bookings.find(x => x.id === bookingId);
+    const updates = {
       check_in_date:  inDate,
       check_in_time:  inTime,
       check_out_date: outDate,
       check_out_time: outTime,
       updated_at: new Date().toISOString(),
-    }).eq('id', bookingId);
+    };
+    let upd = db.from('bookings').update(updates);
+    if (b && b.booking_group_id) {
+      upd = upd.eq('booking_group_id', b.booking_group_id);
+    } else {
+      upd = upd.eq('id', bookingId);
+    }
+    const { error } = await upd;
     if (error) throw error;
 
     // Retroactive billing: update existing invoice if dates changed
@@ -1381,31 +1427,66 @@ async function manageBookingCheckout(bookingId) {
     const weeks   = days >= 7 ? Math.floor(days / 7) : null;
     const invDate = nextWorkday(outDate);
 
+    // Determine the set of bookings to check out (group cascade)
+    const groupId = b?.booking_group_id;
+    const groupBookings = groupId
+      ? _bookings.filter(x => x.booking_group_id === groupId)
+      : (b ? [b] : []);
+    const bookingIds = groupBookings.map(x => x.id);
+    if (!bookingIds.length) bookingIds.push(bookingId);
+
     const { error: bookErr } = await db.from('bookings').update({
       check_in_date:  inDate,
       check_out_date: outDate,
       check_out_time: outTime,
       status: 'completed',
       updated_at: new Date().toISOString(),
-    }).eq('id', bookingId);
+    }).in('id', bookingIds);
     if (bookErr) throw bookErr;
 
+    // One invoice per booking
     const invData = {
       days_billed: days, weeks_billed: weeks,
       off_site_delivery: offsite, outside_window_pickup: outside,
       grace_extension_applied: grace, grace_extension_notes: graceNotes,
       invoice_date: invDate,
     };
-    const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bookingId).maybeSingle();
-    if (inv) {
-      await db.from('invoices').update(invData).eq('id', inv.id);
-    } else {
-      const { error: invErr } = await db.from('invoices').insert({ booking_id: bookingId, ...invData, status: 'pending' });
-      if (invErr) throw invErr;
+    for (const bid of bookingIds) {
+      const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bid).maybeSingle();
+      if (inv) {
+        await db.from('invoices').update(invData).eq('id', inv.id);
+      } else {
+        const { error: invErr } = await db.from('invoices').insert({ booking_id: bid, ...invData, status: 'pending' });
+        if (invErr) throw invErr;
+      }
+    }
+
+    // Auto-create a pending cleaning row for each distinct kennel in the group
+    // (skip if a non-completed cleaning already exists for that kennel)
+    const kennelsInGroup = [...new Set(groupBookings.map(x => x.kennel_number))];
+    if (!kennelsInGroup.length && b) kennelsInGroup.push(b.kennel_number);
+    for (const kn of kennelsInGroup) {
+      const { data: existing } = await db.from('cleanings')
+        .select('id').eq('kennel_number', kn)
+        .not('status','in','("completed","skipped")')
+        .maybeSingle();
+      if (!existing) {
+        const dogList = groupBookings.filter(x => x.kennel_number === kn).map(x => x.dog_name).join(' + ') || b?.dog_name || '';
+        await db.from('cleanings').insert({
+          kennel_number: kn,
+          type: 'full',
+          reason: `Post-checkout: ${dogList} (${outDate})`,
+          scheduled_date: outDate,
+          status: 'pending',
+        });
+      }
     }
 
     closeModal();
-    showToast(`${b?.dog_name || 'Dog'} checked out · Invoice due ${fmtDate(invDate)}`);
+    const dogLabel = groupBookings.length > 1
+      ? groupBookings.map(x => x.dog_name).join(' + ')
+      : (b?.dog_name || 'Dog');
+    showToast(`${dogLabel} checked out · Invoice due ${fmtDate(invDate)}`);
     await loadAll();
   } catch(e) {
     showToast(e.message || 'Error', 'error');
@@ -1426,7 +1507,15 @@ function openLogCheckin(booking) {
   }
   const b = _bookings.find(x => x.id === booking.id) || booking;
 
-  const body = `
+  // Group cascade notice (multi-dog booking)
+  const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id) : [b];
+  const groupNotice = group.length > 1
+    ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
+         <strong>Group booking</strong> — check-in applies to all ${group.length} dogs: ${group.map(g => `${g.dog_name} (K${g.kennel_number})`).join(', ')}
+       </div>`
+    : '';
+
+  const body = groupNotice + `
     <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || todayStr()}"></div>
@@ -1438,19 +1527,27 @@ function openLogCheckin(booking) {
     const inTime = document.getElementById('f-in-time').value;
     if (!inTime) throw new Error('Check-in time is required');
 
+    // Cascade check-in to all dogs in the same group
+    const bookingIds = group.map(x => x.id);
     const { error } = await db.from('bookings').update({
       check_in_date: inDate,
       check_in_time: inTime,
       status: 'active',
       updated_at: new Date().toISOString(),
-    }).eq('id', b.id);
+    }).in('id', bookingIds);
     if (error) throw error;
 
-    // Auto-clear any block on this kennel when a dog checks in
-    await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', b.kennel_number);
+    // Auto-clear any block on the affected kennels
+    const kennels = [...new Set(group.map(x => x.kennel_number))];
+    for (const kn of kennels) {
+      await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', kn);
+    }
 
     closeModal();
-    showToast(`${b.dog_name} checked in to K${b.kennel_number}`);
+    const label = group.length > 1
+      ? `${group.length} dogs checked in: ${group.map(g => g.dog_name).join(' + ')}`
+      : `${b.dog_name} checked in to K${b.kennel_number}`;
+    showToast(label);
     await loadAll();
   }, 'Confirm Check-In');
 }
@@ -1525,30 +1622,71 @@ async function unblockKennel(kennelNum) {
 // ============================================================
 // ACTION: ADD BOOKING
 // ============================================================
+// ----- Multi-dog booking modal (up to 4 dogs per window) -----
+const MAX_DOGS_PER_BOOKING = 4;
+let _addBookingRows = 0;
+
+function abKennelOptions(defaultKennel) {
+  return [...Array(10)].map((_,i) =>
+    `<option value="${i+1}" ${defaultKennel === i+1 ? 'selected' : ''}>K${i+1}</option>`
+  ).join('');
+}
+
+function abDogRow(idx, defaultKennel = null) {
+  return `
+    <div class="form-row-2 ab-dog-row" data-row="${idx}" style="position:relative;margin-bottom:0.5rem">
+      <div class="form-field"><label>Dog ${idx + 1} ${idx === 0 ? '*' : ''}</label>
+        <input type="text" class="ab-dog-name" placeholder="${idx === 0 ? 'e.g. Buddy' : '(optional)'}">
+      </div>
+      <div class="form-field"><label>Kennel ${idx === 0 ? '*' : ''}</label>
+        <div style="display:flex;gap:0.3rem;align-items:flex-start">
+          <select class="ab-dog-kennel" style="flex:1">${abKennelOptions(defaultKennel)}</select>
+          ${idx > 0
+            ? `<button type="button" class="btn-icon" onclick="abRemoveDog(${idx})" title="Remove this dog" style="height:36px">✕</button>`
+            : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+function abAddDog() {
+  if (_addBookingRows >= MAX_DOGS_PER_BOOKING) return;
+  const container = document.getElementById('ab-dogs-container');
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = abDogRow(_addBookingRows);
+  container.appendChild(wrapper.firstElementChild);
+  _addBookingRows++;
+  document.getElementById('ab-add-dog-btn').style.display = _addBookingRows >= MAX_DOGS_PER_BOOKING ? 'none' : '';
+}
+
+function abRemoveDog(idx) {
+  const row = document.querySelector(`.ab-dog-row[data-row="${idx}"]`);
+  if (row) row.remove();
+  document.getElementById('ab-add-dog-btn').style.display = '';
+}
+
 function openAddBooking(defaultKennel = null, defaultDate = null) {
+  _addBookingRows = 0;
   const householdOptions = _households.map(h =>
     `<option value="${h.id}">${h.owner_name}</option>`
   ).join('');
 
   const body = `
-    <div class="form-field"><label>Dog name *</label><input type="text" id="f-dog" placeholder="e.g. Buddy"></div>
-    <div class="form-row-2">
-      <div class="form-field"><label>Kennel *</label>
-        <select id="f-kennel">
-          ${[...Array(10)].map((_,i) => `<option value="${i+1}" ${defaultKennel === i+1 ? 'selected' : ''}>K${i+1}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-field"><label>Owner</label>
-        <select id="f-household" onchange="toggleNewOwner(this)">
-          <option value="">Unknown / TBD</option>
-          ${householdOptions}
-          <option value="new">+ New owner</option>
-        </select>
-      </div>
+    <div class="form-field"><label>Owner</label>
+      <select id="f-household" onchange="toggleNewOwner(this)">
+        <option value="">Unknown / TBD</option>
+        ${householdOptions}
+        <option value="new">+ New owner</option>
+      </select>
     </div>
     <div class="form-field" id="f-new-owner-field" style="display:none">
       <label>New owner name *</label><input type="text" id="f-new-owner" placeholder="Owner's name">
     </div>
+
+    <div style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.5rem 0 0.4rem">Dogs (1–${MAX_DOGS_PER_BOOKING})</div>
+    <div id="ab-dogs-container"></div>
+    <button type="button" id="ab-add-dog-btn" class="btn-add" onclick="abAddDog()" style="margin-bottom:0.75rem">+ Add another dog</button>
+
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date *</label><input type="date" id="f-cin-date" value="${defaultDate || ''}"></div>
       <div class="form-field"><label>Check-in time</label><input type="time" id="f-cin-time"></div>
@@ -1563,8 +1701,6 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     <div class="form-field"><label>Notes</label><textarea id="f-notes" rows="2" placeholder="Optional"></textarea></div>`;
 
   openModal('Add Booking', body, async () => {
-    const dogName  = document.getElementById('f-dog').value.trim();
-    const kennel   = parseInt(document.getElementById('f-kennel').value);
     const cinDate  = document.getElementById('f-cin-date').value;
     const cinTime  = document.getElementById('f-cin-time').value || null;
     const coutDate = document.getElementById('f-cout-date').value;
@@ -1573,7 +1709,14 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     const notes    = document.getElementById('f-notes').value.trim() || null;
     const houseVal = document.getElementById('f-household').value;
 
-    if (!dogName) throw new Error('Dog name is required');
+    // Gather dog rows
+    const rows = [...document.querySelectorAll('.ab-dog-row')];
+    const dogs = rows.map(r => ({
+      name: r.querySelector('.ab-dog-name').value.trim(),
+      kennel: parseInt(r.querySelector('.ab-dog-kennel').value),
+    })).filter(d => d.name);
+
+    if (!dogs.length) throw new Error('At least one dog name is required');
     if (!cinDate || !coutDate) throw new Error('Check-in and check-out dates are required');
 
     let householdId = houseVal && houseVal !== 'new' ? houseVal : null;
@@ -1591,23 +1734,37 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       notes
     ].filter(Boolean).join(' ') || null;
 
-    const { error } = await db.from('bookings').insert({
-      dog_name: dogName,
-      kennel_number: kennel,
+    // Multi-dog bookings share a booking_group_id so future edits cascade
+    const groupId = dogs.length > 1 ? crypto.randomUUID() : null;
+    const rowsToInsert = dogs.map(d => ({
+      dog_name: d.name,
+      kennel_number: d.kennel,
       check_in_date: cinDate,
       check_in_time: cinTime,
       check_out_date: coutDate,
       check_out_time: coutTime,
       status: 'pending',
       household_id: householdId,
+      booking_group_id: groupId,
       notes: notesFull,
-    });
+    }));
+    const { error } = await db.from('bookings').insert(rowsToInsert);
     if (error) throw error;
 
     closeModal();
-    showToast(`Booking added: ${dogName} → K${kennel}`);
+    const label = dogs.length === 1
+      ? `${dogs[0].name} → K${dogs[0].kennel}`
+      : `${dogs.length} dogs: ` + dogs.map(d => `${d.name} (K${d.kennel})`).join(', ');
+    showToast(`Booking added: ${label}`);
     await loadAll();
   });
+
+  // Seed the first dog row after the modal is in the DOM
+  abAddDog();
+  if (defaultKennel) {
+    const sel = document.querySelector('.ab-dog-row[data-row="0"] .ab-dog-kennel');
+    if (sel) sel.value = String(defaultKennel);
+  }
 }
 
 function toggleNewOwner(sel) {
@@ -2027,6 +2184,187 @@ async function kcxDoExport(month) {
 }
 
 // ============================================================
+// CUSTOMERS PAGE
+// ============================================================
+function renderCustomers() {
+  const body = document.getElementById('customers-body');
+  if (!_households.length) {
+    body.innerHTML = '<div class="empty">No customers yet. Tap + Add Customer to create one.</div>';
+    return;
+  }
+  const dogsByHh = {};
+  (_dogs || []).forEach(d => {
+    if (!dogsByHh[d.household_id]) dogsByHh[d.household_id] = [];
+    dogsByHh[d.household_id].push(d);
+  });
+  const td = todayStr();
+  let html = '<div style="display:flex;flex-direction:column;gap:0.75rem">';
+  for (const h of _households) {
+    const dogs = dogsByHh[h.id] || [];
+    const dogHtml = dogs.length
+      ? dogs.map(d => {
+          const due = d.vaccination_due_date;
+          const overdue = due && due < td;
+          const soon    = due && !overdue && due <= addDaysStr(td, 30);
+          const dueBadge = !due ? ''
+            : overdue ? `<span class="badge badge-red" style="margin-left:0.4rem">Vax overdue ${fmtDate(due)}</span>`
+            : soon    ? `<span class="badge badge-yellow" style="margin-left:0.4rem">Vax due ${fmtDate(due)}</span>`
+                      : `<span class="badge badge-green" style="margin-left:0.4rem">Vax ${fmtDate(due)}</span>`;
+          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">🐾 <strong>${d.name}</strong>${dueBadge}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
+        }).join('')
+      : '<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.15rem">No dogs on file</div>';
+
+    const meta = [];
+    if (h.phone) meta.push(`📞 ${h.phone}`);
+    if (h.email) meta.push(`✉️ ${h.email}`);
+    if (h.alternate_contact) meta.push(`Alt: ${h.alternate_contact}`);
+    const metaHtml = meta.length
+      ? `<div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem">${meta.join(' · ')}</div>`
+      : '';
+    const notesHtml = h.notes
+      ? `<div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;font-style:italic">${h.notes}</div>`
+      : '';
+
+    html += `<div class="card" style="padding:0.75rem 1rem">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:0.95rem">${h.owner_name}</div>
+          ${metaHtml}
+          ${notesHtml}
+          <div style="margin-top:0.4rem">${dogHtml}</div>
+        </div>
+        <button class="btn btn-sm btn-secondary" onclick="openEditCustomer('${h.id}')">Edit</button>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+function addDaysStr(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+let _custDogRows = 0;
+
+function custDogRow(idx, dog = null) {
+  const name  = dog?.name || '';
+  const status = dog?.vaccination_status || '';
+  const due   = dog?.vaccination_due_date || '';
+  const notes = dog?.vaccination_notes || '';
+  const id    = dog?.id || '';
+  return `
+    <div class="cust-dog-row" data-row="${idx}" data-dog-id="${id}" style="border:1px solid #e2e8f0;border-radius:8px;padding:0.6rem;margin-bottom:0.5rem;background:#f8fafc">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+        <span style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em">Dog ${idx + 1}</span>
+        <button type="button" class="btn-icon" onclick="custRemoveDog(${idx})" title="Remove dog">✕</button>
+      </div>
+      <div class="form-row-2">
+        <div class="form-field"><label>Name *</label><input type="text" class="cust-dog-name" value="${name.replace(/"/g,'&quot;')}"></div>
+        <div class="form-field"><label>Vaccination due</label><input type="date" class="cust-dog-vax-due" value="${due}"></div>
+      </div>
+      <div class="form-field"><label>Vaccination status</label><input type="text" class="cust-dog-vax-status" value="${status.replace(/"/g,'&quot;')}" placeholder="e.g. Up to date · DA2PP+R"></div>
+      <div class="form-field"><label>Vaccination notes</label><textarea class="cust-dog-vax-notes" rows="2">${notes.replace(/</g,'&lt;')}</textarea></div>
+    </div>`;
+}
+
+function custAddDog(dog = null) {
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = custDogRow(_custDogRows, dog);
+  document.getElementById('cust-dogs-container').appendChild(wrapper.firstElementChild);
+  _custDogRows++;
+}
+
+function custRemoveDog(idx) {
+  const row = document.querySelector(`.cust-dog-row[data-row="${idx}"]`);
+  if (row) row.remove();
+}
+
+function openEditCustomer(householdId) {
+  _custDogRows = 0;
+  const h = householdId ? _households.find(x => x.id === householdId) : null;
+  const existingDogs = h ? (_dogs.filter(d => d.household_id === h.id)) : [];
+
+  const body = `
+    <div class="form-field"><label>Owner name *</label><input type="text" id="cust-owner" value="${(h?.owner_name || '').replace(/"/g,'&quot;')}"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Phone</label><input type="text" id="cust-phone" value="${(h?.phone || '').replace(/"/g,'&quot;')}"></div>
+      <div class="form-field"><label>Email</label><input type="email" id="cust-email" value="${(h?.email || '').replace(/"/g,'&quot;')}"></div>
+    </div>
+    <div class="form-field"><label>Alternate contact</label><input type="text" id="cust-alt" value="${(h?.alternate_contact || '').replace(/"/g,'&quot;')}" placeholder="Name & phone for backup contact"></div>
+    <div class="form-field"><label>Address</label><input type="text" id="cust-address" value="${(h?.address || '').replace(/"/g,'&quot;')}"></div>
+    <div class="form-field"><label>General notes</label><textarea id="cust-notes" rows="2">${(h?.notes || '').replace(/</g,'&lt;')}</textarea></div>
+
+    <div style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.75rem 0 0.4rem">Dogs</div>
+    <div id="cust-dogs-container"></div>
+    <button type="button" class="btn-add" onclick="custAddDog()">+ Add dog</button>`;
+
+  openModal(h ? 'Edit Customer: ' + h.owner_name : 'Add Customer', body, async () => {
+    const owner = document.getElementById('cust-owner').value.trim();
+    if (!owner) throw new Error('Owner name is required');
+    const payload = {
+      owner_name: owner,
+      phone:    document.getElementById('cust-phone').value.trim() || null,
+      email:    document.getElementById('cust-email').value.trim() || null,
+      alternate_contact: document.getElementById('cust-alt').value.trim() || null,
+      address:  document.getElementById('cust-address').value.trim() || null,
+      notes:    document.getElementById('cust-notes').value.trim() || null,
+    };
+
+    let hhId = h?.id;
+    if (h) {
+      const { error } = await db.from('households').update(payload).eq('id', h.id);
+      if (error) throw error;
+    } else {
+      const { data, error } = await db.from('households').insert(payload).select().single();
+      if (error) throw error;
+      hhId = data.id;
+    }
+
+    // Upsert dog rows
+    const rows = [...document.querySelectorAll('.cust-dog-row')];
+    const keepIds = new Set();
+    for (const r of rows) {
+      const name = r.querySelector('.cust-dog-name').value.trim();
+      if (!name) continue;
+      const dogId = r.dataset.dogId || null;
+      const dogPayload = {
+        household_id: hhId,
+        name,
+        vaccination_status: r.querySelector('.cust-dog-vax-status').value.trim() || null,
+        vaccination_due_date: r.querySelector('.cust-dog-vax-due').value || null,
+        vaccination_notes: r.querySelector('.cust-dog-vax-notes').value.trim() || null,
+      };
+      if (dogId) {
+        await db.from('dogs').update(dogPayload).eq('id', dogId);
+        keepIds.add(dogId);
+      } else {
+        const { data: ins } = await db.from('dogs').insert(dogPayload).select().single();
+        if (ins?.id) keepIds.add(ins.id);
+      }
+    }
+    // Delete dogs that were removed
+    for (const ed of existingDogs) {
+      if (!keepIds.has(ed.id)) {
+        await db.from('dogs').delete().eq('id', ed.id);
+      }
+    }
+
+    closeModal();
+    showToast(h ? 'Customer updated' : 'Customer added');
+    await loadAll();
+    renderCustomers();
+  });
+
+  // Seed existing dog rows after modal is in the DOM
+  if (existingDogs.length) {
+    existingDogs.forEach(d => custAddDog(d));
+  }
+}
+
+// ============================================================
 // ACTION: MARK CLEANING DONE
 // ============================================================
 async function markCleaningDone(id, kennelNum) {
@@ -2222,7 +2560,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','shopping','tasks'];
+const MORE_TABS = ['reminders','shopping','tasks','customers'];
 
 function switchTab(tab) {
   const allViews = ['overview','schedule','invoices', ...MORE_TABS];
@@ -2246,6 +2584,7 @@ function switchTab(tab) {
 
   if (tab === 'schedule') renderSchedule();
   if (tab === 'invoices') setInvFilter(_invFilter);
+  if (tab === 'customers') renderCustomers();
 }
 
 function toggleMoreMenu() {
