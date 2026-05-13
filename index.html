@@ -548,8 +548,15 @@ const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov
 const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const PRIORITY_LABELS = { urgent:'Urgent', high:'High', medium_high:'Med-High', medium:'Medium', medium_low:'Med-Low', low:'Low', none:'—' };
 
-function todayStr()    { return new Date().toISOString().slice(0, 10); }
-function tomorrowStr() { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); }
+// Use local date (not UTC) so late-evening MDT doesn't roll to next day
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function tomorrowStr() {
+  const d = new Date(); d.setDate(d.getDate()+1);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -688,9 +695,10 @@ function renderKennels(bookings, cleanings, kennels) {
   const in7Str = in7.toISOString().slice(0, 10);
 
   // Group by kennel
-  const activeByKennel  = {};
-  const pendingByKennel = {};
-  const dirtyKennels    = new Set();
+  const activeByKennel    = {};
+  const pendingByKennel   = {};
+  const completedByKennel = {};
+  const dirtyKennels      = new Set();
 
   bookings.filter(b => b.status === 'active').forEach(b => {
     if (!activeByKennel[b.kennel_number]) activeByKennel[b.kennel_number] = [];
@@ -700,8 +708,11 @@ function renderKennels(bookings, cleanings, kennels) {
     if (!pendingByKennel[b.kennel_number]) pendingByKennel[b.kennel_number] = [];
     pendingByKennel[b.kennel_number].push(b);
   });
-  // Only mark dirty if there's no active dog — a future-scheduled cleaning
-  // doesn't make a kennel "dirty" while the dog is still in it
+  bookings.filter(b => b.status === 'completed').forEach(b => {
+    if (!completedByKennel[b.kennel_number]) completedByKennel[b.kennel_number] = [];
+    completedByKennel[b.kennel_number].push(b);
+  });
+  // Only mark dirty if there's no active dog
   cleanings.forEach(c => {
     if (!activeByKennel[c.kennel_number]) dirtyKennels.add(c.kennel_number);
   });
@@ -730,23 +741,43 @@ function renderKennels(bookings, cleanings, kennels) {
       ? pendingByKennel[k].some(b => b.check_in_date <= in7Str)
       : false;
 
-    const display = isDirty ? 'dirty' : isCheckoutToday ? 'checkout' : isActive ? 'active' : upcoming7 ? 'upcoming' : 'empty';
+    // Only the NEXT (earliest) pending booking for this kennel
+    const nextPending = pendingByKennel[k]
+      ? [...pendingByKennel[k]].sort((a,b) => a.check_in_date.localeCompare(b.check_in_date))[0]
+      : null;
+    const upcoming7 = nextPending ? nextPending.check_in_date <= in7Str : false;
 
+    const display   = isDirty ? 'dirty' : isCheckoutToday ? 'checkout' : isActive ? 'active' : upcoming7 ? 'upcoming' : 'empty';
     const isBlocked = !isActive && !isDirty && kennelMap[k]?.blocked_off;
 
-    const entries  = activeByKennel[k] || (upcoming7 ? pendingByKennel[k] : null) || null;
-    const dogNames = entries
-      ? entries.map(b => b.dog_name).join('+')
-      : isBlocked ? '<span style="color:#94a3b8;font-size:0.68rem;font-weight:600">Blocked</span>' : '—';
-    const rep      = entries ? entries[0] : null;
-    const dateLabel = rep
-      ? (isActive ? 'Out ' + fmtDate(rep.check_out_date) : 'In ' + fmtDate(rep.check_in_date))
-      : isDirty ? 'Needs clean' : isBlocked ? (kennelMap[k].block_reason || '') : '';
-    const actionLabel = isActive ? 'tap to check out' : (isDirty ? 'tap to mark cleaned' : '');
+    // Dog name: active dog > last completed (while dirty) > next pending (once clean) > blocked label
+    let dogName, dateLabel, actionLabel;
+    if (isActive) {
+      dogName     = activeByKennel[k].map(b => b.dog_name).join('+');
+      dateLabel   = 'Out ' + fmtDate(activeByKennel[k][0].check_out_date);
+      actionLabel = 'tap to check out';
+    } else if (isDirty) {
+      const lastDone = completedByKennel[k]
+        ? [...completedByKennel[k]].sort((a,b) => (b.check_out_date||'').localeCompare(a.check_out_date||''))[0]
+        : null;
+      dogName     = lastDone ? lastDone.dog_name : '—';
+      dateLabel   = 'Needs clean';
+      actionLabel = 'tap to mark cleaned';
+    } else if (upcoming7) {
+      dogName     = nextPending.dog_name;
+      dateLabel   = 'In ' + fmtDate(nextPending.check_in_date);
+      actionLabel = 'tap to check in';
+    } else if (isBlocked) {
+      dogName     = '<span style="color:#94a3b8;font-size:0.68rem;font-weight:600">Blocked</span>';
+      dateLabel   = kennelMap[k].block_reason || '';
+      actionLabel = '';
+    } else {
+      dogName = '—'; dateLabel = ''; actionLabel = '';
+    }
 
     const cell = document.createElement('div');
     cell.className = 'kennel-cell ' + display;
-    cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogNames}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
+    cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
 
     if (isDirty && !isActive) {
       const dirtyClean = cleanings.find(c => c.kennel_number === k);
@@ -757,6 +788,10 @@ function renderKennels(bookings, cleanings, kennels) {
     } else if (isActive) {
       cell.style.cursor = 'pointer';
       cell.onclick = () => openLogCheckout(activeByKennel[k][0]);
+    } else if (upcoming7) {
+      // Tap upcoming kennel to check in the next dog
+      cell.style.cursor = 'pointer';
+      cell.onclick = () => openLogCheckin(nextPending);
     } else if (display === 'empty') {
       cell.style.cursor = 'pointer';
       if (isBlocked) {
