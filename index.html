@@ -1729,9 +1729,12 @@ function abKennelOptions(defaultKennel) {
 
 function abDogRow(idx, defaultKennel = null) {
   return `
-    <div class="form-row-2 ab-dog-row" data-row="${idx}" style="position:relative;margin-bottom:0.5rem">
-      <div class="form-field"><label>Dog ${idx + 1} ${idx === 0 ? '*' : ''}</label>
-        <input type="text" class="ab-dog-name" placeholder="${idx === 0 ? 'e.g. Buddy' : '(optional)'}">
+    <div class="form-row-2 ab-dog-row" data-row="${idx}" style="margin-bottom:0.5rem">
+      <div class="form-field" style="position:relative"><label>Dog ${idx + 1} ${idx === 0 ? '*' : ''}</label>
+        <input type="text" class="ab-dog-name" placeholder="${idx === 0 ? 'e.g. Buddy' : '(optional)'}" autocomplete="off">
+        <input type="hidden" class="ab-dog-id">
+        <div class="ab-dog-dropdown"
+             style="display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #cbd5e1;border-radius:6px;max-height:240px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
       </div>
       <div class="form-field"><label>Kennel ${idx === 0 ? '*' : ''}</label>
         <div style="display:flex;gap:0.3rem;align-items:flex-start">
@@ -1744,12 +1747,76 @@ function abDogRow(idx, defaultKennel = null) {
     </div>`;
 }
 
+function abInitDogPicker(row) {
+  const input    = row.querySelector('.ab-dog-name');
+  const hidden   = row.querySelector('.ab-dog-id');
+  const dropdown = row.querySelector('.ab-dog-dropdown');
+
+  function getHouseholdId() {
+    const el = document.getElementById('ab-owner-hh');
+    return el ? (el.value || null) : null;
+  }
+
+  function render() {
+    const q = input.value.trim().toLowerCase();
+    const hhId = getHouseholdId();
+    let dogs = (_dogs || []).filter(d => d.household_id === hhId);
+    if (q) dogs = dogs.filter(d => (d.name || '').toLowerCase().includes(q));
+    dogs.sort((a, b) => a.name.localeCompare(b.name));
+    const exact = q && dogs.find(d => (d.name || '').toLowerCase() === q);
+
+    let html = '';
+    if (!hhId) {
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">Pick an owner first to see saved dogs</div>`;
+    } else if (q && !exact) {
+      html += `<div class="dp-add" style="padding:0.5rem 0.75rem;border-bottom:1px solid #e2e8f0;cursor:pointer;color:#1d4ed8;font-weight:500;background:#eff6ff">
+                 + Save as new dog: "${input.value.trim().replace(/</g,'&lt;')}"
+               </div>`;
+    }
+    dogs.slice(0, 20).forEach(d => {
+      const dueLabel = d.vaccination_due_date
+        ? `<span style="color:#94a3b8;margin-left:0.5rem;font-size:0.78rem">Vax ${fmtDate(d.vaccination_due_date)}</span>`
+        : '';
+      html += `<div class="dp-match" data-id="${d.id}" data-name="${(d.name||'').replace(/"/g,'&quot;')}"
+                  style="padding:0.5rem 0.75rem;cursor:pointer;border-bottom:1px solid #f1f5f9">
+                  ${d.name}${dueLabel}
+               </div>`;
+    });
+    if (hhId && !dogs.length && !q) {
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">No saved dogs yet — type a name</div>`;
+    }
+    dropdown.innerHTML = html;
+    dropdown.style.display = '';
+  }
+
+  input.addEventListener('focus', render);
+  input.addEventListener('input', () => { hidden.value = ''; render(); });
+  input.addEventListener('blur', () => {
+    setTimeout(() => { dropdown.style.display = 'none'; }, 180);
+  });
+  dropdown.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const m = e.target.closest('.dp-match');
+    const a = e.target.closest('.dp-add');
+    if (m) {
+      hidden.value = m.dataset.id;
+      input.value  = m.dataset.name;
+      dropdown.style.display = 'none';
+    } else if (a) {
+      hidden.value = '';
+      dropdown.style.display = 'none';
+    }
+  });
+}
+
 function abAddDog() {
   if (_addBookingRows >= MAX_DOGS_PER_BOOKING) return;
   const container = document.getElementById('ab-dogs-container');
   const wrapper = document.createElement('div');
   wrapper.innerHTML = abDogRow(_addBookingRows);
-  container.appendChild(wrapper.firstElementChild);
+  const rowEl = wrapper.firstElementChild;
+  container.appendChild(rowEl);
+  abInitDogPicker(rowEl);
   _addBookingRows++;
   document.getElementById('ab-add-dog-btn').style.display = _addBookingRows >= MAX_DOGS_PER_BOOKING ? 'none' : '';
 }
@@ -1797,10 +1864,11 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     const ownerHhId  = document.getElementById('ab-owner-hh').value;
     const ownerTyped = document.getElementById('ab-owner-input').value.trim();
 
-    // Gather dog rows
+    // Gather dog rows (preserving any pre-picked dog_id)
     const rows = [...document.querySelectorAll('.ab-dog-row')];
     const dogs = rows.map(r => ({
-      name: r.querySelector('.ab-dog-name').value.trim(),
+      name:   r.querySelector('.ab-dog-name').value.trim(),
+      dogId:  r.querySelector('.ab-dog-id').value || null,
       kennel: parseInt(r.querySelector('.ab-dog-kennel').value),
     })).filter(d => d.name);
 
@@ -1816,6 +1884,33 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       householdId = h.id;
     }
 
+    // Ensure-or-create a dog record per row when a household is set.
+    // Linking via dog_id makes future renames propagate and prevents duplicates.
+    for (const d of dogs) {
+      if (!householdId) { d.dogId = null; continue; }
+
+      // If a dog_id was pre-picked, verify it belongs to the chosen household
+      if (d.dogId) {
+        const existing = _dogs.find(x => x.id === d.dogId);
+        if (existing && existing.household_id === householdId) continue;
+        d.dogId = null;
+      }
+      // Try to match an existing dog by (household, lower(name))
+      const match = (_dogs || []).find(x =>
+        x.household_id === householdId &&
+        (x.name || '').toLowerCase() === d.name.toLowerCase()
+      );
+      if (match) { d.dogId = match.id; continue; }
+
+      // Create a new dogs record
+      const { data: newDog, error: dogErr } = await db.from('dogs')
+        .insert({ household_id: householdId, name: d.name })
+        .select().single();
+      if (dogErr) throw dogErr;
+      d.dogId = newDog.id;
+      _dogs.push(newDog); // keep in-memory cache fresh for subsequent rows
+    }
+
     const notesFull = [
       shared ? '⚠ Shared kennel — owner insists. Rare exception logged.' : null,
       notes
@@ -1825,6 +1920,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     const groupId = dogs.length > 1 ? crypto.randomUUID() : null;
     const rowsToInsert = dogs.map(d => ({
       dog_name: d.name,
+      dog_id:   d.dogId || null,
       kennel_number: d.kennel,
       check_in_date: cinDate,
       check_in_time: cinTime,
