@@ -1620,6 +1620,101 @@ async function unblockKennel(kennelNum) {
 }
 
 // ============================================================
+// REUSABLE: OWNER PICKER (typeahead dropdown over households)
+// ============================================================
+// Renders an input + hidden household_id + dropdown. Caller reads the hidden
+// value (selected household) and the input value (typed name) at submit.
+function ownerPickerHTML(id, initialName = '', initialHouseholdId = '') {
+  const safeName = initialName.replace(/"/g,'&quot;');
+  return `
+    <div class="owner-picker" data-id="${id}" style="position:relative">
+      <input type="text" id="${id}-input" class="owner-picker-input" value="${safeName}" autocomplete="off" placeholder="Type to search or add new">
+      <input type="hidden" id="${id}-hh" value="${initialHouseholdId}">
+      <div id="${id}-dropdown" class="owner-picker-dropdown"
+           style="display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #cbd5e1;border-radius:6px;max-height:240px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
+    </div>`;
+}
+
+function ownerPickerInit(id, opts = {}) {
+  // opts: { onSelectExisting: (household) => void, allowEmpty: true }
+  const input    = document.getElementById(`${id}-input`);
+  const hidden   = document.getElementById(`${id}-hh`);
+  const dropdown = document.getElementById(`${id}-dropdown`);
+  if (!input || !hidden || !dropdown) return;
+
+  function render() {
+    const q = input.value.trim().toLowerCase();
+    const matches = (_households || [])
+      .filter(h => !q || (h.owner_name || '').toLowerCase().includes(q))
+      .sort((a, b) => a.owner_name.localeCompare(b.owner_name));
+    const exact = q && matches.find(h => (h.owner_name || '').toLowerCase() === q);
+
+    let html = '';
+    if (q && !exact) {
+      html += `<div class="op-add" data-action="add"
+                 style="padding:0.5rem 0.75rem;border-bottom:1px solid #e2e8f0;cursor:pointer;color:#1d4ed8;font-weight:500;background:#eff6ff">
+                 + Add new customer: "${input.value.trim().replace(/</g,'&lt;')}"
+               </div>`;
+    }
+    if (opts.allowEmpty && !q) {
+      html += `<div class="op-clear" data-action="clear"
+                 style="padding:0.5rem 0.75rem;border-bottom:1px solid #e2e8f0;cursor:pointer;color:#64748b;font-style:italic">
+                 (Unknown / TBD)
+               </div>`;
+    }
+    if (matches.length) {
+      matches.slice(0, 20).forEach(h => {
+        const phone = h.phone ? `<span style="color:#94a3b8;margin-left:0.5rem;font-size:0.78rem">${h.phone}</span>` : '';
+        html += `<div class="op-match" data-hh="${h.id}" data-name="${(h.owner_name||'').replace(/"/g,'&quot;')}"
+                    style="padding:0.5rem 0.75rem;cursor:pointer;border-bottom:1px solid #f1f5f9">
+                    ${h.owner_name}${phone}
+                 </div>`;
+      });
+    } else if (q) {
+      // No matches; "Add new" is shown above
+    } else {
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">Start typing to search…</div>`;
+    }
+    dropdown.innerHTML = html;
+    dropdown.style.display = '';
+  }
+
+  input.addEventListener('focus', render);
+  input.addEventListener('input', () => {
+    // When typing, clear any previously selected household id
+    hidden.value = '';
+    render();
+  });
+  input.addEventListener('blur', () => {
+    // Delay so click on dropdown row registers first
+    setTimeout(() => { dropdown.style.display = 'none'; }, 180);
+  });
+  dropdown.addEventListener('mousedown', (e) => {
+    e.preventDefault(); // keep input focused, prevent blur race
+    const matchRow = e.target.closest('.op-match');
+    const addRow   = e.target.closest('.op-add');
+    const clearRow = e.target.closest('.op-clear');
+    if (matchRow) {
+      hidden.value = matchRow.dataset.hh;
+      input.value  = matchRow.dataset.name;
+      dropdown.style.display = 'none';
+      if (opts.onSelectExisting) {
+        const h = (_households || []).find(x => x.id === matchRow.dataset.hh);
+        if (h) opts.onSelectExisting(h);
+      }
+    } else if (addRow) {
+      // Keep typed name; hidden remains empty meaning "create new on submit"
+      hidden.value = '';
+      dropdown.style.display = 'none';
+    } else if (clearRow) {
+      hidden.value = '';
+      input.value  = '';
+      dropdown.style.display = 'none';
+    }
+  });
+}
+
+// ============================================================
 // ACTION: ADD BOOKING
 // ============================================================
 // ----- Multi-dog booking modal (up to 4 dogs per window) -----
@@ -1667,20 +1762,10 @@ function abRemoveDog(idx) {
 
 function openAddBooking(defaultKennel = null, defaultDate = null) {
   _addBookingRows = 0;
-  const householdOptions = _households.map(h =>
-    `<option value="${h.id}">${h.owner_name}</option>`
-  ).join('');
 
   const body = `
     <div class="form-field"><label>Owner</label>
-      <select id="f-household" onchange="toggleNewOwner(this)">
-        <option value="">Unknown / TBD</option>
-        ${householdOptions}
-        <option value="new">+ New owner</option>
-      </select>
-    </div>
-    <div class="form-field" id="f-new-owner-field" style="display:none">
-      <label>New owner name *</label><input type="text" id="f-new-owner" placeholder="Owner's name">
+      ${ownerPickerHTML('ab-owner', '', '')}
     </div>
 
     <div style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.5rem 0 0.4rem">Dogs (1–${MAX_DOGS_PER_BOOKING})</div>
@@ -1707,7 +1792,10 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     const coutTime = document.getElementById('f-cout-time').value || null;
     const shared   = document.getElementById('f-shared').checked;
     const notes    = document.getElementById('f-notes').value.trim() || null;
-    const houseVal = document.getElementById('f-household').value;
+
+    // Owner picker: hidden value = existing household id; input = typed name
+    const ownerHhId  = document.getElementById('ab-owner-hh').value;
+    const ownerTyped = document.getElementById('ab-owner-input').value.trim();
 
     // Gather dog rows
     const rows = [...document.querySelectorAll('.ab-dog-row')];
@@ -1719,12 +1807,11 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     if (!dogs.length) throw new Error('At least one dog name is required');
     if (!cinDate || !coutDate) throw new Error('Check-in and check-out dates are required');
 
-    let householdId = houseVal && houseVal !== 'new' ? houseVal : null;
+    let householdId = ownerHhId || null;
 
-    if (houseVal === 'new') {
-      const ownerName = document.getElementById('f-new-owner').value.trim();
-      if (!ownerName) throw new Error('Owner name is required when adding new owner');
-      const { data: h, error: hErr } = await db.from('households').insert({ owner_name: ownerName }).select().single();
+    // If user typed a name but didn't pick an existing one → create a new household
+    if (!householdId && ownerTyped) {
+      const { data: h, error: hErr } = await db.from('households').insert({ owner_name: ownerTyped }).select().single();
       if (hErr) throw hErr;
       householdId = h.id;
     }
@@ -1759,16 +1846,13 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     await loadAll();
   });
 
-  // Seed the first dog row after the modal is in the DOM
+  // Seed the first dog row + owner picker after the modal is in the DOM
   abAddDog();
   if (defaultKennel) {
     const sel = document.querySelector('.ab-dog-row[data-row="0"] .ab-dog-kennel');
     if (sel) sel.value = String(defaultKennel);
   }
-}
-
-function toggleNewOwner(sel) {
-  document.getElementById('f-new-owner-field').style.display = sel.value === 'new' ? '' : 'none';
+  ownerPickerInit('ab-owner', { allowEmpty: true });
 }
 
 // ============================================================
@@ -2287,8 +2371,15 @@ function openEditCustomer(householdId) {
   const h = householdId ? _households.find(x => x.id === householdId) : null;
   const existingDogs = h ? (_dogs.filter(d => d.household_id === h.id)) : [];
 
+  // In ADD mode, use the typeahead picker so William can find an existing
+  // customer (and switch to editing them) or add a new one. In EDIT mode,
+  // use a plain text input so renaming is straightforward.
+  const ownerField = h
+    ? `<input type="text" id="cust-owner" value="${(h.owner_name || '').replace(/"/g,'&quot;')}">`
+    : ownerPickerHTML('cust-owner', '', '');
+
   const body = `
-    <div class="form-field"><label>Owner name *</label><input type="text" id="cust-owner" value="${(h?.owner_name || '').replace(/"/g,'&quot;')}"></div>
+    <div class="form-field"><label>Owner name *</label>${ownerField}</div>
     <div class="form-row-2">
       <div class="form-field"><label>Phone</label><input type="text" id="cust-phone" value="${(h?.phone || '').replace(/"/g,'&quot;')}"></div>
       <div class="form-field"><label>Email</label><input type="email" id="cust-email" value="${(h?.email || '').replace(/"/g,'&quot;')}"></div>
@@ -2302,7 +2393,10 @@ function openEditCustomer(householdId) {
     <button type="button" class="btn-add" onclick="custAddDog()">+ Add dog</button>`;
 
   openModal(h ? 'Edit Customer: ' + h.owner_name : 'Add Customer', body, async () => {
-    const owner = document.getElementById('cust-owner').value.trim();
+    // Owner name: in edit mode read the plain input; in add mode read the picker input
+    const owner = h
+      ? document.getElementById('cust-owner').value.trim()
+      : document.getElementById('cust-owner-input').value.trim();
     if (!owner) throw new Error('Owner name is required');
     const payload = {
       owner_name: owner,
@@ -2361,6 +2455,17 @@ function openEditCustomer(householdId) {
   // Seed existing dog rows after modal is in the DOM
   if (existingDogs.length) {
     existingDogs.forEach(d => custAddDog(d));
+  }
+
+  // Wire up the owner picker in add mode — picking an existing customer
+  // switches this modal into edit mode for that customer.
+  if (!h) {
+    ownerPickerInit('cust-owner', {
+      onSelectExisting: (existing) => {
+        closeModal();
+        openEditCustomer(existing.id);
+      },
+    });
   }
 }
 
