@@ -1636,21 +1636,23 @@ function ownerPickerHTML(id, initialName = '', initialHouseholdId = '') {
 }
 
 function ownerPickerInit(id, opts = {}) {
-  // opts: { onSelectExisting: (household) => void, allowEmpty: true }
+  // opts: { onSelectExisting, allowEmpty, hideAddNew, excludeIds: [] }
   const input    = document.getElementById(`${id}-input`);
   const hidden   = document.getElementById(`${id}-hh`);
   const dropdown = document.getElementById(`${id}-dropdown`);
   if (!input || !hidden || !dropdown) return;
+  const excludeIds = new Set(opts.excludeIds || []);
 
   function render() {
     const q = input.value.trim().toLowerCase();
     const matches = (_households || [])
+      .filter(h => !excludeIds.has(h.id))
       .filter(h => !q || (h.owner_name || '').toLowerCase().includes(q))
       .sort((a, b) => a.owner_name.localeCompare(b.owner_name));
     const exact = q && matches.find(h => (h.owner_name || '').toLowerCase() === q);
 
     let html = '';
-    if (q && !exact) {
+    if (q && !exact && !opts.hideAddNew) {
       html += `<div class="op-add" data-action="add"
                  style="padding:0.5rem 0.75rem;border-bottom:1px solid #e2e8f0;cursor:pointer;color:#1d4ed8;font-weight:500;background:#eff6ff">
                  + Add new customer: "${input.value.trim().replace(/</g,'&lt;')}"
@@ -2413,7 +2415,10 @@ function renderCustomers() {
           ${notesHtml}
           <div style="margin-top:0.4rem">${dogHtml}</div>
         </div>
-        <button class="btn btn-sm btn-secondary" onclick="openEditCustomer('${h.id}')">Edit</button>
+        <div style="display:flex;flex-direction:column;gap:0.3rem">
+          <button class="btn btn-sm btn-secondary" onclick="openEditCustomer('${h.id}')">Edit</button>
+          <button class="btn btn-sm btn-secondary" onclick="openMergeCustomer('${h.id}')" title="Merge this customer into another">Merge…</button>
+        </div>
       </div>
     </div>`;
   }
@@ -2563,6 +2568,65 @@ function openEditCustomer(householdId) {
       },
     });
   }
+}
+
+function openMergeCustomer(sourceId) {
+  const src = _households.find(x => x.id === sourceId);
+  if (!src) return;
+  const srcDogs = _dogs.filter(d => d.household_id === sourceId);
+  const srcBookings = _bookings.filter(b => b.household_id === sourceId);
+
+  const body = `
+    <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:0.6rem 0.8rem;margin-bottom:0.75rem;font-size:0.85rem;color:#92400e">
+      <strong>${src.owner_name}</strong> will be merged into the customer you pick below.
+      The source customer is then deleted.
+      <div style="margin-top:0.25rem;font-size:0.78rem">
+        Source has ${srcDogs.length} dog${srcDogs.length === 1 ? '' : 's'}
+        and ${srcBookings.length} booking${srcBookings.length === 1 ? '' : 's'}.
+      </div>
+    </div>
+    <div class="form-field"><label>Merge into *</label>
+      ${ownerPickerHTML('merge-target', '', '')}
+    </div>
+    <div id="merge-preview" style="font-size:0.82rem;color:#475569;margin-top:0.5rem"></div>`;
+
+  openModal('Merge: ' + src.owner_name, body, async () => {
+    const targetId = document.getElementById('merge-target-hh').value;
+    if (!targetId) throw new Error('Pick an existing customer to merge into');
+    if (targetId === sourceId) throw new Error('Cannot merge a customer into itself');
+
+    const tgt = _households.find(x => x.id === targetId);
+    const confirmText = `Merge "${src.owner_name}" into "${tgt?.owner_name || 'target'}"? This deletes the source customer.`;
+    if (!confirm(confirmText)) return;
+
+    const { data, error } = await db.rpc('merge_households', {
+      p_source: sourceId,
+      p_target: targetId,
+    });
+    if (error) throw error;
+
+    closeModal();
+    const r = data || {};
+    showToast(`Merged · ${r.moved_bookings || 0} bookings, ${r.moved_dogs || 0} dogs reparented, ${r.dedup_dogs || 0} duplicates consolidated`);
+    await loadAll();
+    renderCustomers();
+  }, 'Merge');
+
+  // Target picker: restrict to OTHER customers only, no "+ Add new"
+  ownerPickerInit('merge-target', {
+    hideAddNew: true,
+    excludeIds: [sourceId],
+    onSelectExisting: (existing) => {
+      const tgtDogs = _dogs.filter(d => d.household_id === existing.id);
+      const dupNames = new Set(tgtDogs.map(d => (d.name || '').toLowerCase()));
+      const dupCount = srcDogs.filter(d => dupNames.has((d.name || '').toLowerCase())).length;
+      const reparent = srcDogs.length - dupCount;
+      document.getElementById('merge-preview').innerHTML =
+        `Will move <strong>${srcBookings.length}</strong> booking${srcBookings.length === 1 ? '' : 's'},
+         reparent <strong>${reparent}</strong> dog${reparent === 1 ? '' : 's'},
+         and consolidate <strong>${dupCount}</strong> duplicate${dupCount === 1 ? '' : 's'} into <strong>${existing.owner_name}</strong>.`;
+    },
+  });
 }
 
 // ============================================================
