@@ -582,6 +582,70 @@ function nextWorkday(dateStr) {
 function diffDays(d1, d2) {
   return Math.round((new Date(d2) - new Date(d1)) / 86400000);
 }
+
+// ----- Billing-days calculation per master_summary_v2 rules -----
+// Standard pickup windows. Order matters (chronological within a day).
+const PICKUP_WINDOWS = [
+  { start: '07:00', end: '08:15' }, // morning
+  { start: '12:15', end: '12:45' }, // lunch
+  { start: '17:15', end: '19:00' }, // evening
+];
+function _minOfTime(t) { const [h,m] = t.split(':').map(Number); return h*60+m; }
+function _atTime(dateStr, hhmm) {
+  return new Date(dateStr + 'T' + (hhmm.length === 5 ? hhmm + ':00' : hhmm));
+}
+// Given a JS Date `moment`, return the grace-end Date that applies if that
+// moment is a 24h checkpoint:
+//   - if `moment` falls INSIDE a window → end of the FOLLOWING window
+//   - if `moment` falls BETWEEN windows → end of the NEXT window after `moment`
+//   - if `moment` is after the last window → end of next day's first window
+function _graceEndFor(moment) {
+  const dateStr = moment.toISOString().slice(0,10) === ''
+    ? null
+    : new Date(moment.getTime() - moment.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  // Use local-date string to avoid TZ issues:
+  const y = moment.getFullYear(), m = String(moment.getMonth()+1).padStart(2,'0'), d = String(moment.getDate()).padStart(2,'0');
+  const local = `${y}-${m}-${d}`;
+  const mins = moment.getHours()*60 + moment.getMinutes();
+  // Inside a window?
+  for (let i=0; i<PICKUP_WINDOWS.length; i++) {
+    const w = PICKUP_WINDOWS[i];
+    if (mins >= _minOfTime(w.start) && mins <= _minOfTime(w.end)) {
+      if (i < PICKUP_WINDOWS.length - 1) return _atTime(local, PICKUP_WINDOWS[i+1].end);
+      // last window → next day's first window
+      const next = new Date(moment); next.setDate(next.getDate()+1);
+      const ny = next.getFullYear(), nm = String(next.getMonth()+1).padStart(2,'0'), nd = String(next.getDate()).padStart(2,'0');
+      return _atTime(`${ny}-${nm}-${nd}`, PICKUP_WINDOWS[0].end);
+    }
+  }
+  // Between windows? Find next window start strictly after `mins`.
+  for (const w of PICKUP_WINDOWS) {
+    if (mins < _minOfTime(w.start)) return _atTime(local, w.end);
+  }
+  // After the last window → next day's first window
+  const next = new Date(moment); next.setDate(next.getDate()+1);
+  const ny = next.getFullYear(), nm = String(next.getMonth()+1).padStart(2,'0'), nd = String(next.getDate()).padStart(2,'0');
+  return _atTime(`${ny}-${nm}-${nd}`, PICKUP_WINDOWS[0].end);
+}
+// Compute billing days using 24h-mark-with-grace rule. minDays floors the result.
+// Times accept "HH:MM" or "HH:MM:SS". If a time is missing, defaults are used
+// (check-in 12:00 / check-out 12:00) and a warning is signalled via console.
+function computeBillingDays(inDate, inTime, outDate, outTime, minDays = 2) {
+  if (!inDate || !outDate) return minDays;
+  const ci = _atTime(inDate,  (inTime  || '12:00').slice(0,5));
+  const co = _atTime(outDate, (outTime || '12:00').slice(0,5));
+  if (!(co > ci)) return minDays;
+  let days = 1;
+  const DAY = 24*60*60*1000;
+  for (let n = 1; n < 365; n++) {
+    const mark = new Date(ci.getTime() + n*DAY);
+    if (co <= mark) break;
+    const graceEnd = _graceEndFor(mark);
+    if (co <= graceEnd) break;
+    days++;
+  }
+  return Math.max(minDays, days);
+}
 function fmtBilling(days, weeks) {
   if (!days && days !== 0) return '—';
   if (!weeks) return `${days} day${days !== 1 ? 's' : ''}`;
@@ -1272,7 +1336,7 @@ async function manageBookingSave(bookingId) {
 
     // Retroactive billing: update existing invoice if dates changed
     if (inDate && outDate) {
-      const days  = Math.max(1, diffDays(inDate, outDate));
+      const days  = computeBillingDays(inDate, inTime, outDate, outTime);
       const weeks = days >= 7 ? Math.floor(days / 7) : null;
       const offsite    = document.getElementById('f-offsite').checked;
       const outside    = document.getElementById('f-outside').checked;
@@ -1303,6 +1367,7 @@ async function manageBookingCheckout(bookingId) {
   try {
     const b        = _bookings.find(x => x.id === bookingId);
     const inDate   = document.getElementById('f-in-date').value  || b?.check_in_date;
+    const inTime   = document.getElementById('f-in-time').value  || b?.check_in_time;
     const outDate  = document.getElementById('f-out-date').value || todayStr();
     const outTime  = document.getElementById('f-out-time').value;
     const offsite  = document.getElementById('f-offsite').checked;
@@ -1312,7 +1377,7 @@ async function manageBookingCheckout(bookingId) {
 
     if (!outTime) throw new Error('Check-out time is required');
 
-    const days    = Math.max(1, diffDays(inDate, outDate));
+    const days    = computeBillingDays(inDate, inTime, outDate, outTime);
     const weeks   = days >= 7 ? Math.floor(days / 7) : null;
     const invDate = nextWorkday(outDate);
 
