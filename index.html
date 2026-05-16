@@ -230,6 +230,12 @@
     .kc-cell.kc-span-mid { color: transparent; }
     .kc-cell.kc-clean-marker { position: relative; }
     .kc-cell.kc-clean-marker::after { content: '🧹'; position: absolute; top: 1px; right: 3px; font-size: 0.6rem; line-height: 1; }
+    /* Cleaning scheduled on an otherwise-empty day — render as a visible cleaning slot */
+    .kc-cell.kc-clean-day { background: #fef3c7; color: #92400e; font-size: 0.62rem; }
+    .kc-cell.kc-clean-day::before { content: 'Clean'; }
+    .kc-cell.kc-clean-day.kc-clean-warning { background: #fecaca; color: #991b1b; }
+    .kc-cell.kc-clean-day.kc-clean-warning::before { content: '⚠ Clean'; }
+    .kc-cell.kc-clean-marker.kc-clean-warning::after { content: '⚠'; color: #b91c1c; }
     .kc-cell-shared { display: inline-block; font-size: 0.55rem; margin-left: 2px; vertical-align: super; }
 
     /* ---- Form elements (in modal) ---- */
@@ -524,7 +530,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // ============================================================
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
     _shopping = [], _invoices = [], _households = [], _kennels = [],
-    _dogs = [];
+    _dogs = [], _routines = [];
 let _completions = new Set();
 let _shopTab   = 'local';
 let _invFilter = 'all';
@@ -732,16 +738,17 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').not('status','in','("completed","skipped")').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
     db.from('reminders').select('*').eq('status','active').order('target_date', {nullsFirst: false}),
     db.from('shopping_items').select('*').eq('status','active').order('list_name').order('item'),
-    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time)'),
+    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,household_id)'),
     db.from('households').select('*').order('owner_name'),
     db.from('kennels').select('*').order('kennel_number'),
     db.from('dogs').select('*').order('name'),
+    db.from('routines').select('*').eq('active', true).order('sort_order'),
   ]);
 
   _bookings   = rBook.data   || [];
@@ -753,8 +760,125 @@ async function loadAll() {
   _households = rHouse.data  || [];
   _kennels    = rKen.data    || [];
   _dogs       = rDogs.data   || [];
+  _routines   = rRout.data   || [];
+
+  // Auto-schedule pending cleanings: earliest date possible, max 1/day, prioritized
+  // by each kennel's next check-in. Cleanings that must happen before an imminent
+  // check-in get a transient `must_complete` flag picked up by renders.
+  await autoScheduleCleanings();
 
   renderAll();
+}
+
+// ============================================================
+// CLEANING AUTO-SCHEDULER (Z-series)
+// ============================================================
+// Runs after each loadAll(). Mutates _cleanings (sets scheduled_date + transient
+// must_complete + needs_warning flags) and writes scheduled_date changes back to
+// the DB in the background.
+async function autoScheduleCleanings() {
+  const td = todayStr();
+  if (!_cleanings.length) return;
+
+  // earliestFree[k]: earliest date the kennel is physically free to clean.
+  // Active bookings keep the kennel occupied until their check_out_date.
+  const earliestFree = {};
+  for (let k = 1; k <= 10; k++) earliestFree[k] = td;
+  _bookings.filter(b => b.status === 'active').forEach(b => {
+    if (b.check_out_date && b.check_out_date > earliestFree[b.kennel_number]) {
+      earliestFree[b.kennel_number] = b.check_out_date;
+    }
+  });
+
+  // nextCheckin[k]: earliest upcoming pending check-in date for the kennel
+  // (used to prioritise cleanings and to detect must-complete urgency).
+  const nextCheckin = {};
+  _bookings.filter(b => b.status === 'pending' && b.check_in_date && b.check_in_date >= td)
+    .forEach(b => {
+      const cur = nextCheckin[b.kennel_number];
+      if (!cur || b.check_in_date < cur) nextCheckin[b.kennel_number] = b.check_in_date;
+    });
+
+  // Priority order: kennel with the soonest next check-in first.
+  const sorted = [..._cleanings].sort((a, b) => {
+    const aNext = nextCheckin[a.kennel_number] || '9999-12-31';
+    const bNext = nextCheckin[b.kennel_number] || '9999-12-31';
+    if (aNext !== bNext) return aNext.localeCompare(bNext);
+    // tie-break by current scheduled_date (or created_at)
+    const aKey = a.scheduled_date || (a.created_at || '').slice(0,10) || '9999';
+    const bKey = b.scheduled_date || (b.created_at || '').slice(0,10) || '9999';
+    return aKey.localeCompare(bKey);
+  });
+
+  // Day-budget: track how many cleanings we've assigned to each date so we can
+  // try to keep "max 1/day wherever possible".
+  const dayCounts = {};
+  const writebacks = [];
+
+  for (const c of sorted) {
+    const earliest = earliestFree[c.kennel_number];
+    const limit    = nextCheckin[c.kennel_number]; // cleaning must finish by this date
+
+    let assigned;
+    let mustComplete = false;
+
+    if (limit && limit <= earliest) {
+      // The kennel's next check-in is today (or earlier) — force-schedule today even
+      // if another cleaning is already on today.
+      assigned = earliest;
+      mustComplete = true;
+    } else if (limit) {
+      // Try every date from earliest up to (limit-1); pick the earliest day with
+      // zero other cleanings already booked. If no slot is empty, fall back to the
+      // earliest possible date (doubling-up on that day).
+      const limitDt = new Date(limit + 'T12:00:00');
+      let cursor = new Date(earliest + 'T12:00:00');
+      let firstAvailable = null;
+      let firstAny = null;
+      while (cursor < limitDt) {
+        const ds = cursor.toISOString().slice(0,10);
+        if (firstAny === null) firstAny = ds;
+        if (!dayCounts[ds]) { firstAvailable = ds; break; }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      assigned = firstAvailable || firstAny || earliest;
+
+      // Warning: scheduled on the day-before next check-in (or same day forced)
+      const dayBefore = new Date(limitDt); dayBefore.setDate(dayBefore.getDate() - 1);
+      const dayBeforeStr = dayBefore.toISOString().slice(0,10);
+      if (assigned >= dayBeforeStr) mustComplete = true;
+    } else {
+      // No upcoming check-in — pick the earliest day with no other cleaning yet.
+      let cursor = new Date(earliest + 'T12:00:00');
+      while (dayCounts[cursor.toISOString().slice(0,10)]) {
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      assigned = cursor.toISOString().slice(0,10);
+    }
+
+    dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
+
+    // Update in-memory cleaning so renders see the new state immediately
+    const prev = c.scheduled_date;
+    c.scheduled_date = assigned;
+    c.must_complete  = mustComplete;
+    c._next_checkin  = limit || null;
+
+    if (prev !== assigned) {
+      writebacks.push({ id: c.id, scheduled_date: assigned });
+    }
+  }
+
+  // Persist scheduled_date changes back to the DB (fire-and-forget — renders
+  // already use the in-memory value so we don't need to await before rendering).
+  if (writebacks.length) {
+    (async () => {
+      for (const w of writebacks) {
+        try { await db.from('cleanings').update({ scheduled_date: w.scheduled_date }).eq('id', w.id); }
+        catch(e) { /* silent — next loadAll will retry */ }
+      }
+    })();
+  }
 }
 
 function renderAll() {
@@ -966,16 +1090,32 @@ function renderCleanings(cleanings) {
   }
   const td = todayStr();
   let html = '<table class="tbl"><thead><tr><th>K</th><th>Type</th><th>Date</th><th>Reason</th><th></th></tr></thead><tbody>';
-  cleanings.forEach(c => {
+  // Show in priority order (earliest scheduled first; must_complete bubbled to top)
+  const ordered = [...cleanings].sort((a, b) => {
+    if (!!a.must_complete !== !!b.must_complete) return a.must_complete ? -1 : 1;
+    const ad = a.scheduled_date || '9999-12-31';
+    const bd = b.scheduled_date || '9999-12-31';
+    return ad.localeCompare(bd);
+  });
+  ordered.forEach(c => {
     const overdue   = c.scheduled_date && c.scheduled_date < td;
-    const dateCell  = c.scheduled_date ? `<span style="color:${overdue?'#ef4444':'inherit'}">${fmtDate(c.scheduled_date)}${overdue?' ⚠':''}</span>` : '—';
+    const mustNow   = !!c.must_complete; // day-before or same-day-as next check-in
+    const rowStyle  = mustNow ? 'background:#fef2f2' : '';
+    const dateColor = overdue ? '#ef4444' : (mustNow ? '#b91c1c' : 'inherit');
+    const dateIcon  = overdue ? ' ⚠' : (mustNow ? ' ⚠' : '');
+    const dateCell  = c.scheduled_date
+      ? `<span style="color:${dateColor};font-weight:${mustNow?'600':'400'}">${fmtDate(c.scheduled_date)}${dateIcon}</span>`
+      : '—';
     const typeLabel = c.type === 'quick_refresh' ? '<span class="badge badge-blue">Quick</span>' : '<span class="badge badge-gray">Full</span>';
-    html += `<tr>
+    const warnNote  = mustNow && c._next_checkin
+      ? `<br><span style="color:#b91c1c;font-size:0.72rem;font-weight:600">⚠ Must clean — next check-in ${fmtDate(c._next_checkin)}</span>`
+      : '';
+    html += `<tr style="${rowStyle}">
       <td><strong>K${c.kennel_number}</strong></td>
       <td>${typeLabel}</td>
       <td>${dateCell}</td>
-      <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}${c.notes ? '<br><em>' + c.notes + '</em>' : ''}</td>
-      <td>${!c.scheduled_date || c.scheduled_date > td ? `<button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button>` : ''}</td>
+      <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}${c.notes ? '<br><em>' + c.notes + '</em>' : ''}${warnNote}</td>
+      <td><button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button></td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -1183,36 +1323,125 @@ function renderInvoicePage() {
     return;
   }
   const flagBadge = (val, label, cls) => val ? `<span class="badge ${cls}" style="font-size:0.65rem;margin-right:0.2rem">${label}</span>` : '';
-  let html = '';
+
+  // Group by household, then by booking_group_id (fall back to booking_id for legacy invoices)
+  const byOwner = {}; // householdId|'__none__' -> { ownerName, groups: { groupKey -> { invoices: [] } } }
   invoices.forEach(i => {
-    const b = i.bookings;
-    const statusBadge = i.status === 'sent'
-      ? '<span class="badge badge-blue">Sent</span>'
-      : '<span class="badge badge-yellow">Pending</span>';
-    html += `<div style="background:white;border-radius:10px;padding:1rem;margin-bottom:0.75rem;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
-        <div style="font-size:0.95rem;font-weight:700">${b?.dog_name||'?'} — K${b?.kennel_number||'?'}</div>
-        ${statusBadge}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem 1rem;font-size:0.82rem;color:#475569;margin-bottom:0.5rem">
-        <div>Check-in: ${b ? fmtDate(b.check_in_date) + (b.check_in_time ? ' ' + fmtTime(b.check_in_time) : '') : '—'}</div>
-        <div>Check-out: ${b ? fmtDate(b.check_out_date) + (b.check_out_time ? ' ' + fmtTime(b.check_out_time) : '') : '—'}</div>
-        <div>Billed: <strong>${fmtBilling(i.days_billed, i.weeks_billed)}</strong></div>
-        <div>Invoice date: ${fmtDate(i.invoice_date)}</div>
-      </div>
-      <div style="margin-bottom:0.5rem">
-        ${flagBadge(i.off_site_delivery,'Off-site delivery','badge-purple')}
-        ${flagBadge(i.outside_window_pickup,'Outside-window pickup','badge-orange')}
-        ${flagBadge(i.grace_extension_applied,'Grace extension','badge-blue')}
-        ${i.grace_extension_notes ? `<div style="font-size:0.75rem;color:#64748b;margin-top:0.25rem">${i.grace_extension_notes}</div>` : ''}
-      </div>
-      <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
-        ${i.status === 'pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}')">Mark Invoiced</button>` : ''}
-        ${i.status !== 'paid'    ? `<button class="btn btn-sm btn-success"   onclick="markInvoicePaid('${i.id}')">Mark Paid</button>` : ''}
-      </div>
-    </div>`;
+    const b = i.bookings || {};
+    const hhId = b.household_id || '__none__';
+    if (!byOwner[hhId]) {
+      const hh = (_households || []).find(h => h.id === hhId);
+      byOwner[hhId] = { ownerName: hh ? hh.owner_name : (hhId === '__none__' ? 'Unassigned' : '(Unknown owner)'), groups: {} };
+    }
+    const groupKey = b.booking_group_id || ('single:' + (i.booking_id || i.id));
+    if (!byOwner[hhId].groups[groupKey]) byOwner[hhId].groups[groupKey] = { invoices: [] };
+    byOwner[hhId].groups[groupKey].invoices.push(i);
   });
+
+  // Sort owners alphabetically (unassigned last)
+  const ownerKeys = Object.keys(byOwner).sort((a, b) => {
+    if (a === '__none__') return 1;
+    if (b === '__none__') return -1;
+    return byOwner[a].ownerName.localeCompare(byOwner[b].ownerName);
+  });
+
+  let html = '';
+  ownerKeys.forEach(ownerKey => {
+    const owner = byOwner[ownerKey];
+    // Section header
+    html += `<div style="font-size:0.78rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#475569;margin:1rem 0 0.4rem;padding-bottom:0.25rem;border-bottom:1px solid #e2e8f0">${owner.ownerName}</div>`;
+
+    // Sort groups within owner by invoice_date descending
+    const groupList = Object.values(owner.groups).sort((g1, g2) => {
+      const d1 = g1.invoices[0]?.invoice_date || '';
+      const d2 = g2.invoices[0]?.invoice_date || '';
+      return d2.localeCompare(d1);
+    });
+
+    groupList.forEach(grp => {
+      const invs = grp.invoices;
+      const anyI = invs[0];
+      // Use the first invoice's booking for date display (all share dates within a group)
+      const anyB = anyI.bookings || {};
+      const dogList = invs.map(i => `${i.bookings?.dog_name || '?'} (K${i.bookings?.kennel_number || '?'})`).join(' + ');
+
+      // Status: if all sent → Sent; if all pending → Pending; else Mixed
+      const allSent    = invs.every(i => i.status === 'sent');
+      const allPending = invs.every(i => i.status === 'pending');
+      const statusBadge = allSent
+        ? '<span class="badge badge-blue">Sent</span>'
+        : allPending
+          ? '<span class="badge badge-yellow">Pending</span>'
+          : '<span class="badge badge-gray">Mixed</span>';
+
+      // Flags: union across the group
+      const anyOffsite  = invs.some(i => i.off_site_delivery);
+      const anyOutside  = invs.some(i => i.outside_window_pickup);
+      const anyGrace    = invs.some(i => i.grace_extension_applied);
+      const graceNotes  = invs.map(i => i.grace_extension_notes).filter(Boolean).join(' · ');
+
+      // Per-dog billing line (always show — even single-dog groups benefit from this)
+      const perDogLines = invs.map(i => {
+        const dn = i.bookings?.dog_name || '?';
+        const kn = i.bookings?.kennel_number || '?';
+        const sBadge = i.status === 'sent'
+          ? '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem">Sent</span>'
+          : '<span class="badge badge-yellow" style="font-size:0.6rem;margin-left:0.3rem">Pending</span>';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:0.2rem 0;font-size:0.82rem;color:#475569">
+          <span><strong>${dn}</strong> K${kn} — ${fmtBilling(i.days_billed, i.weeks_billed)}${sBadge}</span>
+          <span style="display:flex;gap:0.25rem">
+            ${i.status === 'pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}')">Invoiced</button>` : ''}
+            ${i.status !== 'paid'    ? `<button class="btn btn-sm btn-success"   onclick="markInvoicePaid('${i.id}')">Paid</button>` : ''}
+          </span>
+        </div>`;
+      }).join('');
+
+      // Bulk-action buttons when the group has >1 dog
+      const bulkActions = invs.length > 1 ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.5rem;padding-top:0.5rem;border-top:1px dashed #e2e8f0">
+        ${invs.some(i => i.status === 'pending') ? `<button class="btn btn-sm btn-secondary" onclick="bulkInvoiceAction('${invs.filter(i=>i.status==='pending').map(i=>i.id).join(',')}','sent')">Mark all Invoiced</button>` : ''}
+        ${invs.some(i => i.status !== 'paid')    ? `<button class="btn btn-sm btn-success"   onclick="bulkInvoiceAction('${invs.filter(i=>i.status!=='paid').map(i=>i.id).join(',')}','paid')">Mark all Paid</button>` : ''}
+      </div>` : '';
+
+      html += `<div style="background:white;border-radius:10px;padding:1rem;margin-bottom:0.75rem;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+          <div style="font-size:0.95rem;font-weight:700">${dogList}</div>
+          ${statusBadge}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem 1rem;font-size:0.82rem;color:#475569;margin-bottom:0.5rem">
+          <div>Check-in: ${anyB.check_in_date ? fmtDate(anyB.check_in_date) + (anyB.check_in_time ? ' ' + fmtTime(anyB.check_in_time) : '') : '—'}</div>
+          <div>Check-out: ${anyB.check_out_date ? fmtDate(anyB.check_out_date) + (anyB.check_out_time ? ' ' + fmtTime(anyB.check_out_time) : '') : '—'}</div>
+          <div>Invoice date: ${fmtDate(anyI.invoice_date)}</div>
+          <div>${invs.length} dog${invs.length !== 1 ? 's' : ''}</div>
+        </div>
+        ${(anyOffsite || anyOutside || anyGrace) ? `<div style="margin-bottom:0.5rem">
+          ${flagBadge(anyOffsite,'Off-site delivery','badge-purple')}
+          ${flagBadge(anyOutside,'Outside-window pickup','badge-orange')}
+          ${flagBadge(anyGrace,'Grace extension','badge-blue')}
+          ${graceNotes ? `<div style="font-size:0.75rem;color:#64748b;margin-top:0.25rem">${graceNotes}</div>` : ''}
+        </div>` : ''}
+        <div style="border-top:1px solid #f1f5f9;padding-top:0.3rem">${perDogLines}</div>
+        ${bulkActions}
+      </div>`;
+    });
+  });
+
   document.getElementById('inv-page-body').innerHTML = html;
+}
+
+async function bulkInvoiceAction(idsCsv, action) {
+  const ids = idsCsv.split(',').filter(Boolean);
+  if (!ids.length) return;
+  if (action === 'sent') {
+    const { error } = await db.from('invoices').update({ status: 'sent' }).in('id', ids);
+    if (error) { showToast(error.message, 'error'); return; }
+    showToast(`${ids.length} invoices marked sent`);
+  } else if (action === 'paid') {
+    const { error } = await db.from('invoices').update({ status: 'paid', paid_date: todayStr() }).in('id', ids);
+    if (error) { showToast(error.message, 'error'); return; }
+    // Also mark related bookings as completed if not already (mirrors markInvoicePaid behaviour)
+    showToast(`${ids.length} invoices marked paid`);
+  }
+  await loadAll();
 }
 
 // ============================================================
@@ -1309,6 +1538,90 @@ function exportHistoryCSV() {
 // ============================================================
 // ACTION: MANAGE BOOKING (D2 — replaces Log Check-Out)
 // ============================================================
+// ── Booking move helpers (per-dog kennel edit + warn-and-swap) ─────────
+function mbKennelOptions(selectedKennel) {
+  return [...Array(10)].map((_, i) =>
+    `<option value="${i+1}" ${(i+1) === selectedKennel ? 'selected' : ''}>K${i+1}</option>`
+  ).join('');
+}
+
+function mbDogKennelRow(b) {
+  // One row per dog in a booking-group: read-only dog name + kennel selector
+  return `<div class="mb-dog-row" data-booking-id="${b.id}" data-original-kennel="${b.kennel_number}"
+              style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem">
+    <div style="flex:1;min-width:0;font-size:0.875rem;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.dog_name}</div>
+    <select class="mb-dog-kennel" style="width:5.5rem">${mbKennelOptions(b.kennel_number)}</select>
+  </div>`;
+}
+
+// datesOverlap: [aIn, aOut] vs [bIn, bOut] — inclusive comparison on dates only.
+// Touching at the boundary (a.out === b.in) is treated as a conflict because the
+// kennel is still occupied on the checkout day.
+function datesOverlap(aIn, aOut, bIn, bOut) {
+  if (!aIn || !aOut || !bIn || !bOut) return false;
+  return aIn <= bOut && aOut >= bIn;
+}
+
+// planBookingMoves — given the desired per-dog kennel edits and the new date range,
+// returns { ok: true } if no external conflicts, { ok: 'swap', swaps: [...] } if all
+// conflicts resolve by swapping with single-row partners, or { ok: false, reason }
+// if the swap would itself create a conflict (cascading).
+function planBookingMoves(group, edits, newInDate, newOutDate, allBookings) {
+  const groupIds = new Set(group.map(b => b.id));
+  const blocked = [];
+  const swaps = [];
+  // Track planned-vacant kennels so multiple swap targets don't collide
+  const plannedVacantOnRange = {}; // kennel -> array of bookingIds we're moving INTO it during the range
+
+  for (const e of edits) {
+    if (e.newKennel === e.oldKennel) continue;
+
+    // External bookings that occupy the target kennel during our (new) date range
+    const conflicts = allBookings.filter(x =>
+      x.kennel_number === e.newKennel &&
+      !groupIds.has(x.id) &&
+      (x.status === 'active' || x.status === 'pending') &&
+      datesOverlap(x.check_in_date, x.check_out_date, newInDate, newOutDate)
+    );
+
+    if (conflicts.length === 0) continue;
+
+    if (conflicts.length > 1) {
+      blocked.push(`K${e.newKennel} has ${conflicts.length} other bookings overlapping (${conflicts.map(c => c.dog_name).join(', ')}). Move one of them first.`);
+      continue;
+    }
+
+    const conflict = conflicts[0];
+
+    // Try to swap: can `conflict` move into `e.oldKennel` for ITS date range?
+    const swapTargetConflicts = allBookings.filter(x =>
+      x.kennel_number === e.oldKennel &&
+      x.id !== conflict.id &&
+      !groupIds.has(x.id) &&
+      (x.status === 'active' || x.status === 'pending') &&
+      datesOverlap(x.check_in_date, x.check_out_date, conflict.check_in_date, conflict.check_out_date)
+    );
+
+    if (swapTargetConflicts.length > 0) {
+      blocked.push(`Can't swap ${conflict.dog_name} from K${e.newKennel} to K${e.oldKennel} — K${e.oldKennel} would conflict with ${swapTargetConflicts.map(x => x.dog_name).join(', ')}.`);
+      continue;
+    }
+
+    swaps.push({
+      bookingId: conflict.id,
+      dogName: conflict.dog_name,
+      fromKennel: e.newKennel,
+      toKennel: e.oldKennel,
+      checkInDate: conflict.check_in_date,
+      checkOutDate: conflict.check_out_date,
+    });
+  }
+
+  if (blocked.length) return { ok: false, reason: blocked.join(' ') };
+  if (swaps.length)   return { ok: 'swap', swaps };
+  return { ok: true };
+}
+
 function openLogCheckout(booking) {
   if (typeof booking === 'string') {
     try { booking = JSON.parse(booking.replace(/'/g, '"')); } catch(e) {}
@@ -1320,12 +1633,17 @@ function openLogCheckout(booking) {
   const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id) : [b];
   const groupNotice = group.length > 1
     ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
-         <strong>Group booking</strong> — changes apply to all ${group.length} dogs: ${group.map(g => `${g.dog_name} (K${g.kennel_number})`).join(', ')}
+         <strong>Group booking</strong> — dates apply to all ${group.length} dogs. Each dog's kennel can be changed independently below.
        </div>`
     : '';
 
-  const body = groupNotice + `
-    <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
+  // Per-dog kennel rows (lets you move any/all dogs in the group between kennels)
+  const dogsBlock = `
+    <div class="form-field"><label>Dogs &amp; kennels</label>
+      <div id="mb-dog-rows">${group.map(g => mbDogKennelRow(g)).join('')}</div>
+    </div>`;
+
+  const body = groupNotice + dogsBlock + `
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
       <div class="form-field"><label>Check-in time</label><input type="time" id="f-in-time" value="${b.check_in_time ? b.check_in_time.slice(0,5) : ''}"></div>
@@ -1362,8 +1680,43 @@ async function manageBookingSave(bookingId) {
     const outDate = document.getElementById('f-out-date').value || null;
     const outTime = document.getElementById('f-out-time').value || null;
 
-    // Cascade dates/times to all bookings in the same group
     const b = _bookings.find(x => x.id === bookingId);
+    const group = b && b.booking_group_id
+      ? _bookings.filter(x => x.booking_group_id === b.booking_group_id)
+      : (b ? [b] : []);
+
+    // Read per-dog kennel edits from the modal
+    const edits = [...document.querySelectorAll('.mb-dog-row')].map(row => {
+      const bk = group.find(g => g.id === row.dataset.bookingId) || _bookings.find(x => x.id === row.dataset.bookingId);
+      return {
+        booking: bk,
+        oldKennel: parseInt(row.dataset.originalKennel, 10),
+        newKennel: parseInt(row.querySelector('.mb-dog-kennel').value, 10),
+      };
+    }).filter(e => e.booking);
+
+    // Check kennel-move conflicts before touching the DB
+    const effectiveIn  = inDate  || (b && b.check_in_date);
+    const effectiveOut = outDate || (b && b.check_out_date);
+    const movesNeeded  = edits.some(e => e.newKennel !== e.oldKennel);
+    let swapPlan       = null;
+
+    if (movesNeeded || group.length > 1) {
+      const plan = planBookingMoves(group, edits, effectiveIn, effectiveOut, _bookings);
+      if (plan.ok === false) {
+        showToast('Kennel conflict — ' + plan.reason, 'error');
+        btn.disabled = false; btn.textContent = 'Save';
+        return;
+      }
+      if (plan.ok === 'swap') {
+        const lines = plan.swaps.map(s => `• ${s.dogName}: K${s.fromKennel} → K${s.toKennel}`).join('\n');
+        const ok = confirm(`Kennel conflict — these bookings would need to swap into the kennels you're vacating:\n\n${lines}\n\nProceed with swap?`);
+        if (!ok) { btn.disabled = false; btn.textContent = 'Save'; return; }
+        swapPlan = plan.swaps;
+      }
+    }
+
+    // 1) Cascade date/time changes to the whole group (per existing behaviour)
     const updates = {
       check_in_date:  inDate,
       check_in_time:  inTime,
@@ -1379,6 +1732,25 @@ async function manageBookingSave(bookingId) {
     }
     const { error } = await upd;
     if (error) throw error;
+
+    // 2) Apply per-dog kennel moves (one row at a time so we don't cascade)
+    for (const e of edits) {
+      if (e.newKennel === e.oldKennel) continue;
+      const { error: kErr } = await db.from('bookings')
+        .update({ kennel_number: e.newKennel, updated_at: new Date().toISOString() })
+        .eq('id', e.booking.id);
+      if (kErr) throw kErr;
+    }
+
+    // 3) Apply any agreed swaps (move the conflicting booking into the vacated kennel)
+    if (swapPlan) {
+      for (const s of swapPlan) {
+        const { error: sErr } = await db.from('bookings')
+          .update({ kennel_number: s.toKennel, updated_at: new Date().toISOString() })
+          .eq('id', s.bookingId);
+        if (sErr) throw sErr;
+      }
+    }
 
     // Retroactive billing: update existing invoice if dates changed
     if (inDate && outDate) {
@@ -1511,12 +1883,14 @@ function openLogCheckin(booking) {
   const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id) : [b];
   const groupNotice = group.length > 1
     ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
-         <strong>Group booking</strong> — check-in applies to all ${group.length} dogs: ${group.map(g => `${g.dog_name} (K${g.kennel_number})`).join(', ')}
+         <strong>Group booking</strong> — check-in applies to all ${group.length} dogs. Each dog's kennel can be changed independently below.
        </div>`
     : '';
 
   const body = groupNotice + `
-    <div class="form-field"><label>Dog</label><input readonly value="${b.dog_name} — K${b.kennel_number}"></div>
+    <div class="form-field"><label>Dogs &amp; kennels</label>
+      <div id="mb-dog-rows">${group.map(g => mbDogKennelRow(g)).join('')}</div>
+    </div>
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || todayStr()}"></div>
       <div class="form-field"><label>Check-in time *</label><input type="time" id="f-in-time" value="${b.check_in_time || ''}"></div>
@@ -1527,7 +1901,32 @@ function openLogCheckin(booking) {
     const inTime = document.getElementById('f-in-time').value;
     if (!inTime) throw new Error('Check-in time is required');
 
-    // Cascade check-in to all dogs in the same group
+    // Read per-dog kennel edits + run conflict check against the (possibly new) check-in date
+    const edits = [...document.querySelectorAll('.mb-dog-row')].map(row => {
+      const bk = group.find(g => g.id === row.dataset.bookingId);
+      return {
+        booking: bk,
+        oldKennel: parseInt(row.dataset.originalKennel, 10),
+        newKennel: parseInt(row.querySelector('.mb-dog-kennel').value, 10),
+      };
+    }).filter(e => e.booking);
+
+    const movesNeeded = edits.some(e => e.newKennel !== e.oldKennel);
+    let swapPlan = null;
+    if (movesNeeded) {
+      const effectiveIn  = inDate || b.check_in_date;
+      const effectiveOut = b.check_out_date;
+      const plan = planBookingMoves(group, edits, effectiveIn, effectiveOut, _bookings);
+      if (plan.ok === false) throw new Error('Kennel conflict — ' + plan.reason);
+      if (plan.ok === 'swap') {
+        const lines = plan.swaps.map(s => `• ${s.dogName}: K${s.fromKennel} → K${s.toKennel}`).join('\n');
+        const okSwap = confirm(`Kennel conflict — swap?\n\n${lines}\n\nProceed?`);
+        if (!okSwap) throw new Error('Cancelled by user');
+        swapPlan = plan.swaps;
+      }
+    }
+
+    // Cascade check-in (date/time + status) to all dogs in the same group
     const bookingIds = group.map(x => x.id);
     const { error } = await db.from('bookings').update({
       check_in_date: inDate,
@@ -1537,9 +1936,23 @@ function openLogCheckin(booking) {
     }).in('id', bookingIds);
     if (error) throw error;
 
-    // Auto-clear any block on the affected kennels
-    const kennels = [...new Set(group.map(x => x.kennel_number))];
-    for (const kn of kennels) {
+    // Apply per-dog kennel moves
+    for (const e of edits) {
+      if (e.newKennel === e.oldKennel) continue;
+      await db.from('bookings').update({ kennel_number: e.newKennel, updated_at: new Date().toISOString() })
+        .eq('id', e.booking.id);
+    }
+    if (swapPlan) {
+      for (const s of swapPlan) {
+        await db.from('bookings').update({ kennel_number: s.toKennel, updated_at: new Date().toISOString() })
+          .eq('id', s.bookingId);
+      }
+    }
+
+    // Auto-clear any block on the affected kennels (using FINAL kennel numbers after move)
+    const finalKennels = new Set();
+    edits.forEach(e => finalKennels.add(e.newKennel));
+    for (const kn of finalKennels) {
       await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', kn);
     }
 
@@ -2093,6 +2506,13 @@ function renderKennelCalendar() {
         label = showName ? `${names}${sharedFlag ? '<span class="kc-cell-shared" title="Shared kennel">⚠</span>' : ''}` : '·';
         const titleNames = bArr.map(bk => `${bk.dog_name} (${bk.status})`).join(', ');
         attrs = `data-booking="${b.id}" title="K${k} — ${titleNames}"`;
+      } else if (c) {
+        // Cleaning scheduled on an otherwise-empty (no-booking) day — show as a
+        // distinct "clean day" cell so the schedule is visible in the expanded view.
+        cls += ' kc-clean-day';
+        if (c.must_complete) cls += ' kc-clean-warning';
+        label = '';
+        attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning scheduled${c.must_complete ? ' (must complete: next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
       } else if (blockedSet.has(k)) {
         cls += ' kc-blocked';
         label = 'Blocked';
@@ -2102,7 +2522,10 @@ function renderKennelCalendar() {
         label = '+';
         attrs = `data-add-kennel="${k}" data-add-date="${ds}"`;
       }
-      if (c) cls += ' kc-clean-marker';
+      if (c && b) {
+        cls += ' kc-clean-marker';
+        if (c.must_complete) cls += ' kc-clean-warning';
+      }
       html += `<td class="${cls}" ${attrs}>${label}</td>`;
     }
     html += '</tr>';
@@ -2118,9 +2541,16 @@ function renderKennelCalendar() {
       const bId = cell.getAttribute('data-booking');
       const addK = cell.getAttribute('data-add-kennel');
       const blockedK = cell.getAttribute('data-blocked');
+      const cleaningId = cell.getAttribute('data-cleaning');
       if (bId) {
         const b = _bookings.find(x => x.id === bId);
         if (b) { closeKennelCalendar(); openLogCheckout(b); }
+      } else if (cleaningId) {
+        const c = _cleanings.find(x => x.id === cleaningId);
+        if (c && confirm(`Mark K${c.kennel_number} cleaning done?`)) {
+          closeKennelCalendar();
+          markCleaningDone(c.id, c.kennel_number);
+        }
       } else if (addK) {
         const ds = cell.getAttribute('data-add-date');
         closeKennelCalendar();
@@ -2900,29 +3330,256 @@ function wmoDesc(code) {
   return 'Unknown';
 }
 
-// [time_hhmm_or_null, label, skip_if_no_boarding]
-const ROUTINE_WEEKDAY = [
-  ['08:00', 'Let out dogs and feed', true],
-  ['08:30', 'Take pill', false],
-  ['08:30', 'Work', false],
-  ['12:15', 'Let out dogs (lunch)', true],
-  ['17:15', 'Let out dogs and feed supper', true],
-  ['17:30', 'Evening — meal prep / cook dinner', false],
-  [null,    'Spend time with dogs (30 min)', false],
-  [null,    'Exercise (30 min)', false],
-  [null,    'Office study (1 hour)', false],
-];
-const ROUTINE_WEEKEND = [
-  ['08:00', 'Let out dogs and feed', true],
-  ['08:30', 'Take pill', false],
-  ['12:15', 'Let out dogs (lunch)', true],
-  ['17:15', 'Let out dogs and feed supper', true],
-  [null,    'Meal prep / cook dinner', false],
-  [null,    'Spend time with dogs (30 min)', false],
-  [null,    'Exercise (30 min)', false],
-];
-
 function slugKey(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''); }
+
+// ── Routine recurrence engine ─────────────────────────────────────
+// Tests whether a routines-row matches a specific date (YYYY-MM-DD).
+function routineMatchesDate(r, dateStr) {
+  if (!r.active) return false;
+  if (r.start_date && dateStr < r.start_date) return false;
+  if (r.end_date   && dateStr > r.end_date)   return false;
+  const d = new Date(dateStr + 'T12:00:00');
+  switch (r.recurrence) {
+    case 'one_off':     return r.one_off_date === dateStr;
+    case 'daily':       return true;
+    case 'weekly':      return Array.isArray(r.days_of_week) && r.days_of_week.includes(d.getDay());
+    case 'monthly_dom': return r.day_of_month === d.getDate();
+    case 'interval': {
+      if (!r.interval_days || !r.interval_anchor) return false;
+      if (dateStr < r.interval_anchor) return false;
+      const days = Math.round((d - new Date(r.interval_anchor + 'T12:00:00')) / 86400000);
+      return (days % r.interval_days) === 0;
+    }
+    case 'annual':
+      return (d.getMonth() + 1) === r.annual_month && d.getDate() === r.annual_day;
+    default: return false;
+  }
+}
+
+// ── Routine add/edit modal ──────────────────────────────────────────
+function rmRecurrenceFields(recurrence, r) {
+  // Render the conditional fields for a given recurrence type, pre-filled from `r` if provided.
+  r = r || {};
+  const dow = Array.isArray(r.days_of_week) ? r.days_of_week : [];
+  const dayCheck = (n, label) =>
+    `<label style="display:inline-flex;align-items:center;gap:0.25rem;margin-right:0.5rem;font-weight:400;font-size:0.85rem">
+       <input type="checkbox" class="rm-dow" value="${n}" ${dow.includes(n)?'checked':''}> ${label}
+     </label>`;
+  switch (recurrence) {
+    case 'one_off':
+      return `<div class="form-field"><label>Date *</label>
+        <input type="date" id="rm-one-off-date" value="${r.one_off_date || ''}"></div>`;
+    case 'weekly':
+      return `<div class="form-field"><label>Repeat on *</label>
+        <div>${dayCheck(0,'Sun')}${dayCheck(1,'Mon')}${dayCheck(2,'Tue')}${dayCheck(3,'Wed')}${dayCheck(4,'Thu')}${dayCheck(5,'Fri')}${dayCheck(6,'Sat')}</div>
+      </div>`;
+    case 'monthly_dom':
+      return `<div class="form-field"><label>Day of month (1–31) *</label>
+        <input type="number" id="rm-dom" min="1" max="31" value="${r.day_of_month || ''}"></div>`;
+    case 'interval':
+      return `<div class="form-row-2">
+        <div class="form-field"><label>Every N days *</label>
+          <input type="number" id="rm-interval" min="1" value="${r.interval_days || ''}"></div>
+        <div class="form-field"><label>Starting on *</label>
+          <input type="date" id="rm-anchor" value="${r.interval_anchor || todayStr()}"></div>
+      </div>`;
+    case 'annual':
+      return `<div class="form-row-2">
+        <div class="form-field"><label>Month (1–12) *</label>
+          <input type="number" id="rm-annual-month" min="1" max="12" value="${r.annual_month || ''}"></div>
+        <div class="form-field"><label>Day (1–31) *</label>
+          <input type="number" id="rm-annual-day" min="1" max="31" value="${r.annual_day || ''}"></div>
+      </div>`;
+    case 'daily':
+    default:
+      return '';
+  }
+}
+
+function rmRender(recurrence, r) {
+  document.getElementById('rm-recurrence-fields').innerHTML = rmRecurrenceFields(recurrence, r);
+}
+
+function rmReadFields(recurrence) {
+  // Returns object with the recurrence-specific fields parsed + validated.
+  const out = {
+    one_off_date: null, days_of_week: null, day_of_month: null,
+    interval_days: null, interval_anchor: null, annual_month: null, annual_day: null,
+  };
+  switch (recurrence) {
+    case 'one_off': {
+      const v = document.getElementById('rm-one-off-date').value;
+      if (!v) throw new Error('Pick a date');
+      out.one_off_date = v;
+      break;
+    }
+    case 'weekly': {
+      const days = [...document.querySelectorAll('.rm-dow')]
+        .filter(cb => cb.checked).map(cb => parseInt(cb.value, 10));
+      if (!days.length) throw new Error('Pick at least one weekday');
+      out.days_of_week = days;
+      break;
+    }
+    case 'monthly_dom': {
+      const v = parseInt(document.getElementById('rm-dom').value, 10);
+      if (!v || v < 1 || v > 31) throw new Error('Pick a day of the month (1–31)');
+      out.day_of_month = v;
+      break;
+    }
+    case 'interval': {
+      const n = parseInt(document.getElementById('rm-interval').value, 10);
+      const anchor = document.getElementById('rm-anchor').value;
+      if (!n || n < 1) throw new Error('Interval must be at least 1 day');
+      if (!anchor) throw new Error('Pick a starting date');
+      out.interval_days = n;
+      out.interval_anchor = anchor;
+      break;
+    }
+    case 'annual': {
+      const m = parseInt(document.getElementById('rm-annual-month').value, 10);
+      const d = parseInt(document.getElementById('rm-annual-day').value, 10);
+      if (!m || m < 1 || m > 12) throw new Error('Month must be 1–12');
+      if (!d || d < 1 || d > 31) throw new Error('Day must be 1–31');
+      out.annual_month = m;
+      out.annual_day = d;
+      break;
+    }
+    case 'daily':
+    default: break;
+  }
+  return out;
+}
+
+function openAddRoutine(defaultDate) {
+  const body = `
+    <div class="form-field"><label>Label *</label>
+      <input type="text" id="rm-label" placeholder="e.g. Restock kennel treats"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Time (optional)</label>
+        <input type="time" id="rm-time"></div>
+      <div class="form-field"><label>Recurrence *</label>
+        <select id="rm-recurrence" onchange="rmRender(this.value, {})">
+          <option value="one_off">One-off (specific date)</option>
+          <option value="daily">Daily</option>
+          <option value="weekly" selected>Weekly (pick weekdays)</option>
+          <option value="monthly_dom">Monthly (day of month)</option>
+          <option value="interval">Every N days</option>
+          <option value="annual">Annual (month + day)</option>
+        </select>
+      </div>
+    </div>
+    <div id="rm-recurrence-fields"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Start date (optional)</label>
+        <input type="date" id="rm-start-date"></div>
+      <div class="form-field"><label>End date (optional)</label>
+        <input type="date" id="rm-end-date"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="rm-skip-no-board"><label for="rm-skip-no-board">Skip if no dogs boarding</label></div>
+    </div>`;
+
+  openModal('Add Routine', body, async () => {
+    const label = document.getElementById('rm-label').value.trim();
+    const time  = document.getElementById('rm-time').value || null;
+    const recurrence = document.getElementById('rm-recurrence').value;
+    if (!label) throw new Error('Label is required');
+    const recFields = rmReadFields(recurrence);
+    const startDate = document.getElementById('rm-start-date').value || null;
+    const endDate   = document.getElementById('rm-end-date').value || null;
+    const skipNoBoard = document.getElementById('rm-skip-no-board').checked;
+
+    const taskKey = 'routine_' + slugKey(label) + '_' + Math.random().toString(36).slice(2,6);
+    const { error } = await db.from('routines').insert({
+      label, time, recurrence,
+      ...recFields,
+      start_date: startDate, end_date: endDate,
+      skip_if_no_boarding: skipNoBoard,
+      task_key: taskKey,
+      sort_order: 100,
+      active: true,
+    });
+    if (error) throw error;
+    closeModal();
+    showToast('Routine added: ' + label);
+    await loadAll();
+    if (typeof renderSchedule === 'function') renderSchedule();
+  });
+
+  // Seed default fields after the modal is in the DOM
+  rmRender('weekly', defaultDate ? { days_of_week: [new Date(defaultDate + 'T12:00:00').getDay()] } : {});
+}
+
+function openEditRoutine(routineId) {
+  const r = (_routines || []).find(x => x.id === routineId);
+  if (!r) { showToast('Routine not found', 'error'); return; }
+  const body = `
+    <div class="form-field"><label>Label *</label>
+      <input type="text" id="rm-label" value="${(r.label || '').replace(/"/g,'&quot;')}"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Time (optional)</label>
+        <input type="time" id="rm-time" value="${r.time || ''}"></div>
+      <div class="form-field"><label>Recurrence *</label>
+        <select id="rm-recurrence" onchange="rmRender(this.value, {})">
+          <option value="one_off"     ${r.recurrence==='one_off'?'selected':''}>One-off (specific date)</option>
+          <option value="daily"       ${r.recurrence==='daily'?'selected':''}>Daily</option>
+          <option value="weekly"      ${r.recurrence==='weekly'?'selected':''}>Weekly (pick weekdays)</option>
+          <option value="monthly_dom" ${r.recurrence==='monthly_dom'?'selected':''}>Monthly (day of month)</option>
+          <option value="interval"    ${r.recurrence==='interval'?'selected':''}>Every N days</option>
+          <option value="annual"      ${r.recurrence==='annual'?'selected':''}>Annual (month + day)</option>
+        </select>
+      </div>
+    </div>
+    <div id="rm-recurrence-fields"></div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Start date (optional)</label>
+        <input type="date" id="rm-start-date" value="${r.start_date || ''}"></div>
+      <div class="form-field"><label>End date (optional)</label>
+        <input type="date" id="rm-end-date" value="${r.end_date || ''}"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="rm-skip-no-board" ${r.skip_if_no_boarding?'checked':''}><label for="rm-skip-no-board">Skip if no dogs boarding</label></div>
+    </div>
+    <div style="margin-top:0.75rem;padding-top:0.5rem;border-top:1px solid #e2e8f0">
+      <button type="button" class="btn btn-sm btn-danger" onclick="deleteRoutine('${r.id}','${(r.label||'').replace(/'/g,'\\\'')}')">Delete routine</button>
+    </div>`;
+
+  openModal('Edit Routine', body, async () => {
+    const label = document.getElementById('rm-label').value.trim();
+    const time  = document.getElementById('rm-time').value || null;
+    const recurrence = document.getElementById('rm-recurrence').value;
+    if (!label) throw new Error('Label is required');
+    const recFields = rmReadFields(recurrence);
+    const startDate = document.getElementById('rm-start-date').value || null;
+    const endDate   = document.getElementById('rm-end-date').value || null;
+    const skipNoBoard = document.getElementById('rm-skip-no-board').checked;
+
+    const { error } = await db.from('routines').update({
+      label, time, recurrence,
+      ...recFields,
+      start_date: startDate, end_date: endDate,
+      skip_if_no_boarding: skipNoBoard,
+      updated_at: new Date().toISOString(),
+    }).eq('id', routineId);
+    if (error) throw error;
+    closeModal();
+    showToast('Routine updated');
+    await loadAll();
+    if (typeof renderSchedule === 'function') renderSchedule();
+  });
+
+  rmRender(r.recurrence, r);
+}
+
+async function deleteRoutine(routineId, label) {
+  if (!confirm(`Delete routine "${label}"? Completion history is kept.`)) return;
+  const { error } = await db.from('routines').update({ active: false }).eq('id', routineId);
+  if (error) { showToast(error.message, 'error'); return; }
+  closeModal();
+  showToast('Routine deleted');
+  await loadAll();
+  if (typeof renderSchedule === 'function') renderSchedule();
+}
 
 // ── Date navigation helpers ───────────────────────────────────
 function schedNav(delta) {
@@ -2997,19 +3654,32 @@ async function renderSchedule() {
     wEl.innerHTML = `<div class="sched-weather-desc" style="color:#94a3b8">${isPast ? 'Historical weather not available' : 'Beyond 7-day forecast'}</div>`;
   }
 
-  // Routine
-  const routine = isWeekend ? ROUTINE_WEEKEND : ROUTINE_WEEKDAY;
-  let rHTML = '<div class="sched-card"><div class="sched-card-title">Routine</div>';
-  routine.forEach(([time, label, skipIfNoBoarding]) => {
-    if (skipIfNoBoarding && !hasBoarded) return;
-    const timeMins = time ? (parseInt(time) * 60 + parseInt(time.split(':')[1])) : null;
+  // Routine — DB-driven (recurrence patterns applied per-date)
+  let rHTML = `<div class="sched-card">
+    <div class="sched-card-title" style="display:flex;align-items:center;justify-content:space-between">
+      <span>Routine</span>
+      <button class="btn-add" onclick="openAddRoutine('${td}')">+ Add</button>
+    </div>`;
+  const todaysRoutines = (_routines || [])
+    .filter(r => routineMatchesDate(r, td))
+    .sort((a, b) => {
+      // Order: timed (by time ASC) before untimed (by sort_order)
+      if (!!a.time !== !!b.time) return a.time ? -1 : 1;
+      if (a.time && b.time && a.time !== b.time) return a.time.localeCompare(b.time);
+      return (a.sort_order || 100) - (b.sort_order || 100);
+    });
+  todaysRoutines.forEach(r => {
+    if (r.skip_if_no_boarding && !hasBoarded) return;
+    const time     = r.time || null;
+    const timeMins = time ? (parseInt(time.slice(0,2),10) * 60 + parseInt(time.slice(3,5),10)) : null;
     const past     = timeMins !== null && nowMins > timeMins;
-    const key      = 'routine_' + slugKey(label);
+    const key      = r.task_key || ('routine_' + slugKey(r.label));
     const done     = _completions.has(key);
     rHTML += `<div class="sched-item ${done ? 'done' : past ? 'past' : ''}">
       <input type="checkbox" class="sched-cb" ${done ? 'checked' : ''} onchange="toggleCompletion('${key}',this,'${td}')">
       <div class="sched-time">${time ? fmtTime(time + ':00') : ''}</div>
-      <div class="sched-label">${label}</div>
+      <div class="sched-label">${r.label}</div>
+      <button class="btn-icon" title="Edit routine" onclick="openEditRoutine('${r.id}')" style="font-size:0.75rem;padding:0.1rem 0.3rem">✏</button>
     </div>`;
   });
 
