@@ -330,6 +330,7 @@
     <button class="more-btn" id="more-shopping" onclick="switchTab('shopping')">Shopping</button>
     <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
+    <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
   </div>
 
   <!-- SCHEDULE VIEW -->
@@ -420,6 +421,13 @@
         </div>
         <div class="card-body" id="customers-body"><div class="loading">Loading…</div></div>
       </div>
+    </div>
+  </div>
+
+  <!-- DOGS PAGE -->
+  <div id="dogs-view" style="display:none">
+    <div class="page-view" id="dogs-page-body">
+      <div class="loading">Loading…</div>
     </div>
   </div>
 
@@ -531,6 +539,8 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
     _shopping = [], _invoices = [], _households = [], _kennels = [],
     _dogs = [], _routines = [];
+let _currentDogId = null;
+let _vaccRecords = []; // vaccination_records for _currentDogId (loaded lazily)
 let _completions = new Set();
 let _shopTab   = 'local';
 let _invFilter = 'all';
@@ -998,11 +1008,11 @@ function renderKennels(bookings, cleanings, kennels) {
       }
     } else if (isActive) {
       cell.style.cursor = 'pointer';
-      cell.onclick = () => openLogCheckout(activeByKennel[k][0]);
+      cell.onclick = () => openBookingChooser(activeByKennel[k][0].id);
     } else if (upcoming7) {
-      // Tap upcoming kennel to check in the next dog
+      // Tap upcoming kennel to open chooser (check in / edit / dog details / owner)
       cell.style.cursor = 'pointer';
-      cell.onclick = () => openLogCheckin(nextPending);
+      cell.onclick = () => openBookingChooser(nextPending.id);
     } else if (display === 'ready') {
       cell.style.cursor = 'pointer';
       cell.onclick = () => openVacantKennelModal(k);
@@ -1538,6 +1548,68 @@ function exportHistoryCSV() {
 // ============================================================
 // ACTION: MANAGE BOOKING (D2 — replaces Log Check-Out)
 // ============================================================
+// ── Booking chooser (opens when tapping an active/pending kennel block) ──
+function openLogCheckoutById(id) {
+  const b = _bookings.find(x => x.id === id);
+  if (b) openLogCheckout(b);
+}
+function openLogCheckinById(id) {
+  const b = _bookings.find(x => x.id === id);
+  if (b) openLogCheckin(b);
+}
+
+function openBookingChooser(bookingId) {
+  const b = _bookings.find(x => x.id === bookingId);
+  if (!b) return;
+  const k = b.kennel_number;
+  const groupId = b.booking_group_id;
+  const group = groupId ? _bookings.filter(x => x.booking_group_id === groupId) : [b];
+
+  // Primary action depends on booking status
+  let primaryHTML = '';
+  let editHTML = '';
+  if (b.status === 'active') {
+    primaryHTML = `<button class="btn btn-danger" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">🔴 Check Out / Manage Booking</button>`;
+  } else if (b.status === 'pending') {
+    primaryHTML = `<button class="btn btn-success" onclick="closeModal();openLogCheckinById('${b.id}')" style="padding:1rem;font-size:0.95rem">🟢 Check In</button>`;
+    editHTML    = `<button class="btn btn-secondary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:0.75rem;text-align:left">✏ Edit booking (dates / kennel)</button>`;
+  } else if (b.status === 'completed') {
+    primaryHTML = `<button class="btn btn-primary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">📋 View booking / Invoice</button>`;
+  } else {
+    primaryHTML = `<button class="btn btn-secondary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">View booking</button>`;
+  }
+
+  // One Dog Details entry per dog in the group (so multi-dog bookings give
+  // independent links — Buddy + Rex appear as separate options)
+  let dogsHTML = '';
+  group.forEach(g => {
+    if (g.dog_id) {
+      dogsHTML += `<button class="btn btn-secondary" onclick="closeModal();openDogPage('${g.dog_id}')" style="padding:0.75rem;text-align:left">🐕 ${g.dog_name} — dog details</button>`;
+    }
+  });
+
+  // Owner link (jumps to Customers page — future enhancement: open the
+  // specific household card scrolled into view)
+  let ownerHTML = '';
+  if (b.household_id) {
+    const owner = (_households || []).find(h => h.id === b.household_id);
+    ownerHTML = `<button class="btn btn-secondary" onclick="closeModal();switchTab('customers')" style="padding:0.75rem;text-align:left">👤 View owner${owner ? ': ' + owner.owner_name : ''}</button>`;
+  }
+
+  const titleSuffix = group.length > 1
+    ? ` — ${group.map(g => g.dog_name).join(' + ')}`
+    : ` — ${b.dog_name}`;
+  const body = `<div style="display:flex;flex-direction:column;gap:0.5rem">
+    ${primaryHTML}
+    ${editHTML}
+    ${dogsHTML}
+    ${ownerHTML}
+  </div>`;
+
+  openModal('K' + k + titleSuffix, body, null);
+  document.getElementById('modal-footer').innerHTML = '<button class="btn btn-secondary" onclick="closeModal()">Close</button>';
+}
+
 // ── Booking move helpers (per-dog kennel edit + warn-and-swap) ─────────
 function mbKennelOptions(selectedKennel) {
   return [...Array(10)].map((_, i) =>
@@ -2544,7 +2616,7 @@ function renderKennelCalendar() {
       const cleaningId = cell.getAttribute('data-cleaning');
       if (bId) {
         const b = _bookings.find(x => x.id === bId);
-        if (b) { closeKennelCalendar(); openLogCheckout(b); }
+        if (b) { closeKennelCalendar(); openBookingChooser(b.id); }
       } else if (cleaningId) {
         const c = _cleanings.find(x => x.id === cleaningId);
         if (c && confirm(`Mark K${c.kennel_number} cleaning done?`)) {
@@ -2822,7 +2894,7 @@ function renderCustomers() {
             : overdue ? `<span class="badge badge-red" style="margin-left:0.4rem">Vax overdue ${fmtDate(due)}</span>`
             : soon    ? `<span class="badge badge-yellow" style="margin-left:0.4rem">Vax due ${fmtDate(due)}</span>`
                       : `<span class="badge badge-green" style="margin-left:0.4rem">Vax ${fmtDate(due)}</span>`;
-          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">🐾 <strong>${d.name}</strong>${dueBadge}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
+          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">🐾 <a style="color:#1d4ed8;font-weight:600;cursor:pointer;text-decoration:none" onclick="openDogPage('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">${d.name}</a>${dueBadge}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
         }).join('')
       : '<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.15rem">No dogs on file</div>';
 
@@ -2860,6 +2932,404 @@ function addDaysStr(dateStr, days) {
   const d = new Date(dateStr);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+// ============================================================
+// DOG PAGE
+// ============================================================
+async function openDogPage(dogId) {
+  _currentDogId = dogId;
+  // Show the dogs view
+  switchTab('dogs');
+  // switchTab already calls renderDogPage when _currentDogId is set
+}
+
+function renderDogsList() {
+  const body = document.getElementById('dogs-page-body');
+  const dogs = [..._dogs].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (!dogs.length) {
+    body.innerHTML = '<div class="card"><div class="card-body"><div class="empty">No dogs on file yet. Add one from the Customers page.</div></div></div>';
+    return;
+  }
+  let html = `<div class="card">
+    <div class="card-header"><h2>Dogs</h2><span class="badge badge-gray">${dogs.length}</span></div>
+    <div class="card-body">
+      <div style="display:flex;flex-direction:column;gap:0.4rem">`;
+  const td = todayStr();
+  dogs.forEach(d => {
+    const h   = (_households || []).find(x => x.id === d.household_id);
+    const owner = h ? h.owner_name : '(no owner)';
+    const due = d.vaccination_due_date;
+    const overdue = due && due < td;
+    const soon    = due && !overdue && due <= addDaysStr(td, 30);
+    const dueBadge = !due ? '<span class="badge badge-gray" style="font-size:0.65rem">No vax record</span>'
+      : overdue ? `<span class="badge badge-red" style="font-size:0.65rem">Vax overdue ${fmtDate(due)}</span>`
+      : soon    ? `<span class="badge badge-yellow" style="font-size:0.65rem">Vax due ${fmtDate(due)}</span>`
+                : `<span class="badge badge-green" style="font-size:0.65rem">Vax ${fmtDate(due)}</span>`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;background:white"
+                onclick="openDogPage('${d.id}')"
+                onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:0.95rem">🐾 ${d.name}</div>
+        <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner}</div>
+      </div>
+      ${dueBadge}
+    </div>`;
+  });
+  html += '</div></div></div>';
+  body.innerHTML = html;
+}
+
+async function renderDogPage() {
+  const body = document.getElementById('dogs-page-body');
+  const d = (_dogs || []).find(x => x.id === _currentDogId);
+  if (!d) {
+    _currentDogId = null;
+    renderDogsList();
+    return;
+  }
+  // Fetch fresh dog row + vaccination records (the in-memory _dogs cache may be
+  // stale on text fields like feeding_instructions — refetch for accuracy).
+  const [{ data: freshDog }, { data: records }] = await Promise.all([
+    db.from('dogs').select('*').eq('id', d.id).single(),
+    db.from('vaccination_records').select('*').eq('dog_id', d.id).order('uploaded_at', { ascending: false }),
+  ]);
+  const dog = freshDog || d;
+  _vaccRecords = records || [];
+
+  // Determine the dog's siblings within the same owner (next/prev scope)
+  const owner = (_households || []).find(h => h.id === dog.household_id);
+  const siblings = (_dogs || []).filter(x => x.household_id === dog.household_id)
+                                .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const idx = siblings.findIndex(x => x.id === dog.id);
+  const hasPrev = idx > 0;
+  const hasNext = idx >= 0 && idx < siblings.length - 1;
+
+  // Vaccination derived state
+  const approved    = _vaccRecords.filter(r => r.status === 'approved');
+  const pending     = _vaccRecords.filter(r => r.status === 'pending_approval');
+  const rejected    = _vaccRecords.filter(r => r.status === 'rejected');
+  const currentRec  = approved
+    .filter(r => r.expiration_date)
+    .sort((a, b) => b.expiration_date.localeCompare(a.expiration_date))[0]
+    || approved[0]
+    || null;
+  const td          = todayStr();
+  const overdue     = currentRec?.expiration_date && currentRec.expiration_date < td;
+  const soon        = currentRec?.expiration_date && !overdue && currentRec.expiration_date <= addDaysStr(td, 30);
+  const currentBadge = !currentRec ? '<span class="badge badge-gray">No record on file</span>'
+    : !currentRec.expiration_date ? '<span class="badge badge-gray">No expiration set</span>'
+    : overdue ? `<span class="badge badge-red">Overdue (expired ${fmtDate(currentRec.expiration_date)})</span>`
+    : soon    ? `<span class="badge badge-yellow">Expires ${fmtDate(currentRec.expiration_date)}</span>`
+              : `<span class="badge badge-green">Up to date — expires ${fmtDate(currentRec.expiration_date)}</span>`;
+
+  const PORTAL_TAG = '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem" title="Will be visible to the owner via the customer portal">owner-visible</span>';
+  const STAFF_TAG  = '<span class="badge badge-gray" style="font-size:0.6rem;margin-left:0.3rem" title="Internal only — not exposed to the customer portal">staff only</span>';
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem">
+      <button class="btn btn-sm btn-secondary" onclick="_currentDogId=null; renderDogsList()">← All dogs</button>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm btn-secondary" onclick="dogNav(-1)" ${hasPrev?'':'disabled'} title="Previous dog (same owner)">← Prev</button>
+      <button class="btn btn-sm btn-secondary" onclick="dogNav(1)"  ${hasNext?'':'disabled'} title="Next dog (same owner)">Next →</button>
+    </div>
+
+    <div class="card" style="margin-bottom:0.75rem">
+      <div class="card-header">
+        <h2 style="margin:0">🐾 ${dog.name}</h2>
+        ${currentBadge}
+      </div>
+      <div class="card-body">
+        <div style="font-size:0.85rem;color:#475569;margin-bottom:0.4rem">
+          Owner:
+          ${owner
+            ? `<a style="color:#1d4ed8;cursor:pointer;text-decoration:none;font-weight:600" onclick="switchTab('customers')">${owner.owner_name}</a>${siblings.length > 1 ? ` <span style="color:#94a3b8">· ${idx+1} of ${siblings.length}</span>` : ''}`
+            : '<span style="color:#94a3b8">(no owner linked)</span>'}
+        </div>
+        <div class="form-field">
+          <label>Feeding instructions ${PORTAL_TAG}</label>
+          <textarea id="dog-feeding" rows="3" placeholder="e.g. 1 cup kibble morning + evening, no chicken">${(dog.feeding_instructions || '').replace(/</g,'&lt;')}</textarea>
+        </div>
+        <div class="form-field">
+          <label>Medication instructions ${PORTAL_TAG}</label>
+          <textarea id="dog-medication" rows="3" placeholder="e.g. Heart medication 1 tablet daily, AM with food">${(dog.medication_instructions || '').replace(/</g,'&lt;')}</textarea>
+        </div>
+        <div class="form-field">
+          <label>Internal notes ${STAFF_TAG}</label>
+          <textarea id="dog-internal-notes" rows="3" placeholder="e.g. Nervous around men, prefers small kennels">${(dog.internal_notes || '').replace(/</g,'&lt;')}</textarea>
+        </div>
+        <button class="btn btn-primary" onclick="saveDogFields('${dog.id}')">Save changes</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:0.75rem">
+      <div class="card-header">
+        <h2 style="margin:0">Vaccination Records ${PORTAL_TAG}</h2>
+        <button class="btn-add" onclick="openVaccUpload('${dog.id}')">+ Upload</button>
+      </div>
+      <div class="card-body">`;
+
+  // Pending approvals (future customer-portal uploads land here)
+  if (pending.length) {
+    html += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:0.6rem;margin-bottom:0.75rem">
+      <div style="font-size:0.78rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#b45309;margin-bottom:0.4rem">Pending approval</div>`;
+    pending.forEach(r => {
+      html += vaccRecordRow(r, true);
+    });
+    html += '</div>';
+  }
+
+  // Approved record history
+  if (approved.length) {
+    html += `<div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;margin-bottom:0.35rem">Approved records</div>`;
+    approved.forEach(r => { html += vaccRecordRow(r, false); });
+  } else if (!pending.length && !rejected.length) {
+    html += '<div class="empty">No vaccination records on file yet.</div>';
+  }
+
+  // Rejected records (kept for audit; staff can re-approve from this list)
+  if (rejected.length) {
+    html += `<div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin:0.75rem 0 0.35rem">Rejected</div>`;
+    rejected.forEach(r => { html += vaccRecordRow(r, false); });
+  }
+
+  html += `</div></div>`;
+
+  body.innerHTML = html;
+}
+
+function vaccRecordRow(r, isPending) {
+  const fileBtn = r.file_path
+    ? `<button class="btn btn-sm btn-secondary" onclick="viewVaccFile('${r.file_path}')">📄 View file</button>`
+    : '<span style="color:#94a3b8;font-size:0.75rem">No file attached</span>';
+  const exp = r.expiration_date
+    ? `<span style="color:#475569">Expires ${fmtDate(r.expiration_date)}</span>`
+    : '<span style="color:#94a3b8">No expiration set</span>';
+  const sourceTag = r.source === 'customer'
+    ? '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem">from owner</span>'
+    : '<span class="badge badge-gray" style="font-size:0.6rem;margin-left:0.3rem">staff upload</span>';
+  const statusTag = r.status === 'approved'
+    ? '<span class="badge badge-green" style="font-size:0.6rem">Approved</span>'
+    : r.status === 'pending_approval'
+      ? '<span class="badge badge-yellow" style="font-size:0.6rem">Pending</span>'
+      : '<span class="badge badge-gray" style="font-size:0.6rem">Rejected</span>';
+  const uploaded = r.uploaded_at ? new Date(r.uploaded_at).toLocaleDateString() : '';
+  const notesHtml = r.notes ? `<div style="font-size:0.75rem;color:#94a3b8;margin-top:0.25rem">${r.notes.replace(/</g,'&lt;')}</div>` : '';
+
+  const actions = isPending
+    ? `<button class="btn btn-sm btn-success" onclick="approveVaccRecord('${r.id}')">Approve</button>
+       <button class="btn btn-sm btn-danger"  onclick="rejectVaccRecord('${r.id}')">Reject</button>`
+    : `<button class="btn-icon" title="Edit expiration / notes" onclick="openEditVaccRecord('${r.id}')">✏</button>
+       <button class="btn-icon" title="Delete" onclick="deleteVaccRecord('${r.id}')" style="color:#b91c1c">🗑</button>`;
+
+  return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;padding:0.5rem 0;border-bottom:1px solid #f1f5f9">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:0.85rem">
+        ${exp}${sourceTag}${isPending ? '' : ' ' + statusTag}
+      </div>
+      <div style="font-size:0.72rem;color:#94a3b8;margin-top:0.1rem">Uploaded ${uploaded}${r.file_name ? ' · ' + r.file_name.replace(/</g,'&lt;') : ''}</div>
+      ${notesHtml}
+    </div>
+    <div style="display:flex;gap:0.3rem;flex-shrink:0;align-items:center">
+      ${fileBtn}
+      ${actions}
+    </div>
+  </div>`;
+}
+
+function dogNav(delta) {
+  const dog = (_dogs || []).find(x => x.id === _currentDogId);
+  if (!dog) return;
+  const siblings = (_dogs || []).filter(x => x.household_id === dog.household_id)
+                                .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const idx = siblings.findIndex(x => x.id === dog.id);
+  const next = siblings[idx + delta];
+  if (next) {
+    _currentDogId = next.id;
+    renderDogPage();
+  }
+}
+
+async function saveDogFields(dogId) {
+  const feeding    = document.getElementById('dog-feeding').value.trim() || null;
+  const medication = document.getElementById('dog-medication').value.trim() || null;
+  const internal   = document.getElementById('dog-internal-notes').value.trim() || null;
+
+  const { error } = await db.from('dogs').update({
+    feeding_instructions: feeding,
+    medication_instructions: medication,
+    internal_notes: internal,
+  }).eq('id', dogId);
+  if (error) { showToast(error.message, 'error'); return; }
+
+  // Update in-memory cache so the page reflects changes without a full reload
+  const dRef = (_dogs || []).find(x => x.id === dogId);
+  if (dRef) {
+    dRef.feeding_instructions    = feeding;
+    dRef.medication_instructions = medication;
+    dRef.internal_notes          = internal;
+  }
+  showToast('Saved');
+}
+
+// ── Vaccination upload + lifecycle ───────────────────────────────────
+function openVaccUpload(dogId) {
+  const body = `
+    <div class="form-field"><label>Vaccination file (PDF or image, optional)</label>
+      <input type="file" id="vacc-file" accept=".pdf,.png,.jpg,.jpeg,.heic">
+      <div style="font-size:0.72rem;color:#94a3b8;margin-top:0.2rem">Skip if you only want to record an expiration date without a file.</div>
+    </div>
+    <div class="form-field"><label>Expiration date</label>
+      <input type="date" id="vacc-expiration">
+    </div>
+    <div class="form-field"><label>Notes</label>
+      <textarea id="vacc-notes" rows="2" placeholder="e.g. Rabies + DHPP — Dr. Smith"></textarea>
+    </div>`;
+
+  openModal('Upload Vaccination Record', body, async () => {
+    const fileInput  = document.getElementById('vacc-file');
+    const expiration = document.getElementById('vacc-expiration').value || null;
+    const notes      = document.getElementById('vacc-notes').value.trim() || null;
+    const file       = fileInput.files[0] || null;
+
+    let filePath = null;
+    let fileName = null;
+    if (file) {
+      const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${dogId}/${stamp}-${safeName}`;
+      const { error: upErr } = await db.storage
+        .from('vaccination-records')
+        .upload(path, file, { contentType: file.type, upsert: false });
+      if (upErr) throw new Error('Upload failed: ' + upErr.message);
+      filePath = path;
+      fileName = file.name;
+    }
+
+    const { error } = await db.from('vaccination_records').insert({
+      dog_id: dogId,
+      expiration_date: expiration,
+      file_path: filePath,
+      file_name: fileName,
+      notes,
+      source: 'staff',
+      status: 'approved',
+      approved_at: new Date().toISOString(),
+      approved_by: 'staff',
+    });
+    if (error) throw error;
+
+    // Keep legacy dogs.vaccination_due_date in sync as the cached snapshot of the
+    // latest approved expiration (Customers page still reads this column).
+    if (expiration) {
+      await db.from('dogs').update({ vaccination_due_date: expiration }).eq('id', dogId);
+      const dRef = (_dogs || []).find(x => x.id === dogId);
+      if (dRef) dRef.vaccination_due_date = expiration;
+    }
+
+    closeModal();
+    showToast('Vaccination record added');
+    if (_currentDogId === dogId) renderDogPage();
+  });
+}
+
+async function viewVaccFile(filePath) {
+  // Generate a short-lived signed URL and open in a new tab
+  const { data, error } = await db.storage
+    .from('vaccination-records')
+    .createSignedUrl(filePath, 300); // 5-minute link
+  if (error) { showToast('Could not open file: ' + error.message, 'error'); return; }
+  window.open(data.signedUrl, '_blank', 'noopener');
+}
+
+async function approveVaccRecord(recordId) {
+  // Approving a pending record optionally lets staff confirm/update the expiration
+  const rec = (_vaccRecords || []).find(r => r.id === recordId);
+  if (!rec) return;
+  const body = `
+    <div style="font-size:0.85rem;color:#475569;margin-bottom:0.5rem">Confirm or update the expiration date before approving.</div>
+    <div class="form-field"><label>Expiration date *</label>
+      <input type="date" id="vacc-approve-expiration" value="${rec.expiration_date || ''}">
+    </div>
+    <div class="form-field"><label>Approval notes (optional)</label>
+      <textarea id="vacc-approve-notes" rows="2">${(rec.notes || '').replace(/</g,'&lt;')}</textarea>
+    </div>`;
+  openModal('Approve Vaccination Record', body, async () => {
+    const expiration = document.getElementById('vacc-approve-expiration').value;
+    const notes      = document.getElementById('vacc-approve-notes').value.trim() || null;
+    if (!expiration) throw new Error('Set an expiration date before approving');
+    const { error } = await db.from('vaccination_records').update({
+      status: 'approved',
+      expiration_date: expiration,
+      notes,
+      approved_at: new Date().toISOString(),
+      approved_by: 'staff',
+    }).eq('id', recordId);
+    if (error) throw error;
+    // Update the cached dogs.vaccination_due_date snapshot
+    await db.from('dogs').update({ vaccination_due_date: expiration }).eq('id', rec.dog_id);
+    const dRef = (_dogs || []).find(x => x.id === rec.dog_id);
+    if (dRef) dRef.vaccination_due_date = expiration;
+    closeModal();
+    showToast('Record approved');
+    if (_currentDogId === rec.dog_id) renderDogPage();
+  }, 'Approve');
+}
+
+async function rejectVaccRecord(recordId) {
+  if (!confirm('Reject this vaccination record? It will stay on file in the rejected list for audit but won\'t count as current.')) return;
+  const { error } = await db.from('vaccination_records').update({
+    status: 'rejected', approved_at: null, approved_by: 'staff',
+  }).eq('id', recordId);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast('Record rejected');
+  if (_currentDogId) renderDogPage();
+}
+
+function openEditVaccRecord(recordId) {
+  const rec = (_vaccRecords || []).find(r => r.id === recordId);
+  if (!rec) return;
+  const body = `
+    <div class="form-field"><label>Expiration date</label>
+      <input type="date" id="vacc-edit-expiration" value="${rec.expiration_date || ''}">
+    </div>
+    <div class="form-field"><label>Notes</label>
+      <textarea id="vacc-edit-notes" rows="2">${(rec.notes || '').replace(/</g,'&lt;')}</textarea>
+    </div>`;
+  openModal('Edit Vaccination Record', body, async () => {
+    const expiration = document.getElementById('vacc-edit-expiration').value || null;
+    const notes      = document.getElementById('vacc-edit-notes').value.trim() || null;
+    const { error } = await db.from('vaccination_records').update({
+      expiration_date: expiration, notes,
+    }).eq('id', recordId);
+    if (error) throw error;
+    // If this is the latest approved record, refresh the cached dogs.vaccination_due_date
+    const approvedLatest = (_vaccRecords || [])
+      .filter(r => r.status === 'approved' && r.expiration_date)
+      .sort((a, b) => b.expiration_date.localeCompare(a.expiration_date))[0];
+    if (approvedLatest && approvedLatest.id === recordId && expiration) {
+      await db.from('dogs').update({ vaccination_due_date: expiration }).eq('id', rec.dog_id);
+      const dRef = (_dogs || []).find(x => x.id === rec.dog_id);
+      if (dRef) dRef.vaccination_due_date = expiration;
+    }
+    closeModal();
+    showToast('Record updated');
+    if (_currentDogId === rec.dog_id) renderDogPage();
+  });
+}
+
+async function deleteVaccRecord(recordId) {
+  const rec = (_vaccRecords || []).find(r => r.id === recordId);
+  if (!rec) return;
+  if (!confirm('Delete this vaccination record? This cannot be undone. (Customers won\'t have this option in the future portal.)')) return;
+  // Remove the file from storage if one is attached
+  if (rec.file_path) {
+    await db.storage.from('vaccination-records').remove([rec.file_path]);
+  }
+  const { error } = await db.from('vaccination_records').delete().eq('id', recordId);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast('Record deleted');
+  if (_currentDogId === rec.dog_id) renderDogPage();
 }
 
 let _custDogRows = 0;
@@ -3255,7 +3725,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','shopping','tasks','customers'];
+const MORE_TABS = ['reminders','shopping','tasks','customers','dogs'];
 
 function switchTab(tab) {
   const allViews = ['overview','schedule','invoices', ...MORE_TABS];
@@ -3280,6 +3750,11 @@ function switchTab(tab) {
   if (tab === 'schedule') renderSchedule();
   if (tab === 'invoices') setInvFilter(_invFilter);
   if (tab === 'customers') renderCustomers();
+  if (tab === 'dogs') {
+    // Default to the alphabetical list when arriving via the More menu
+    if (!_currentDogId) renderDogsList();
+    else renderDogPage();
+  }
 }
 
 function toggleMoreMenu() {
