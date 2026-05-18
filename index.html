@@ -88,6 +88,10 @@
     .kennel-cell.ready    { background: #dcfce7; border-color: #86efac; cursor: pointer; }
     .kennel-cell.ready:hover { border-color: #4ade80; }
     .kennel-cell.empty    { background: #f8fafc; border-color: #e2e8f0; }
+    .kennel-cell.blocked  { background: repeating-linear-gradient(45deg, #fef3c7 0 6px, #fde68a 6px 12px); border-color: #fcd34d; cursor: pointer; }
+    .kennel-cell.blocked:hover { border-color: #f59e0b; }
+    .kennel-cell.blocked  .k-dog    { color: #92400e; }
+    .kennel-cell.blocked  .k-action { color: #92400e; }
     .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
     .k-dog  { font-size: 0.75rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
     .k-date { font-size: 0.62rem; color: #94a3b8; margin-top: 0.2rem; }
@@ -538,7 +542,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // ============================================================
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
     _shopping = [], _invoices = [], _households = [], _kennels = [],
-    _dogs = [], _routines = [];
+    _dogs = [], _routines = [], _kennelBlocks = [];
 let _currentDogId = null;
 let _vaccRecords = []; // vaccination_records for _currentDogId (loaded lazily)
 let _completions = new Set();
@@ -748,7 +752,7 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').not('status','in','("completed","skipped")').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
@@ -759,18 +763,20 @@ async function loadAll() {
     db.from('kennels').select('*').order('kennel_number'),
     db.from('dogs').select('*').order('name'),
     db.from('routines').select('*').eq('active', true).order('sort_order'),
+    db.from('kennel_blocks').select('*').order('start_date'),
   ]);
 
-  _bookings   = rBook.data   || [];
-  _cleanings  = rClean.data  || [];
-  _tasks      = rTask.data   || [];
-  _reminders  = rRemind.data || [];
-  _shopping   = rShop.data   || [];
-  _invoices   = rInv.data    || [];
-  _households = rHouse.data  || [];
-  _kennels    = rKen.data    || [];
-  _dogs       = rDogs.data   || [];
-  _routines   = rRout.data   || [];
+  _bookings     = rBook.data   || [];
+  _cleanings    = rClean.data  || [];
+  _tasks        = rTask.data   || [];
+  _reminders    = rRemind.data || [];
+  _shopping     = rShop.data   || [];
+  _invoices     = rInv.data    || [];
+  _households   = rHouse.data  || [];
+  _kennels      = rKen.data    || [];
+  _dogs         = rDogs.data   || [];
+  _routines     = rRout.data   || [];
+  _kennelBlocks = rBlocks.data || [];
 
   // Auto-schedule pending cleanings: earliest date possible, max 1/day, prioritized
   // by each kennel's next check-in. Cleanings that must happen before an imminent
@@ -962,15 +968,16 @@ function renderKennels(bookings, cleanings, kennels) {
       : null;
     const upcoming7 = nextPending ? nextPending.check_in_date <= in7Str : false;
 
-    const isBlocked = !isActive && !isDirty && kennelMap[k]?.blocked_off;
+    const todayBlocks = getKennelBlocksOn(k, td);
+    const isBlocked   = !isActive && !isDirty && todayBlocks.length > 0;
     const display   = isDirty ? 'dirty'
                     : isCheckoutToday ? 'checkout'
                     : isActive ? 'active'
                     : upcoming7 ? 'upcoming'
-                    : isBlocked ? 'empty'
+                    : isBlocked ? 'blocked'
                     : 'ready';  // clean + idle = green "Ready"
 
-    // Dog name: active dog > last completed (while dirty) > next pending (once clean) > blocked label > Ready
+    // Dog name: active dog > last completed (while dirty) > next pending (once clean) > block reason > Ready
     let dogName, dateLabel, actionLabel;
     if (isActive) {
       dogName     = activeByKennel[k].map(b => b.dog_name).join('+');
@@ -988,9 +995,15 @@ function renderKennels(bookings, cleanings, kennels) {
       dateLabel   = 'In ' + fmtDate(nextPending.check_in_date);
       actionLabel = 'tap to check in';
     } else if (isBlocked) {
-      dogName     = '<span style="color:#94a3b8;font-size:0.68rem;font-weight:600">Blocked</span>';
-      dateLabel   = kennelMap[k].block_reason || '';
-      actionLabel = '';
+      // Show the actual block reason as the primary label (not just "Blocked")
+      const primary  = todayBlocks[0];
+      const reason   = (primary.reason || '').replace(/</g,'&lt;');
+      const reasonTitle = todayBlocks.map(b => b.reason).join(' · ').replace(/"/g,'&quot;');
+      dogName     = `<span style="color:#92400e;font-size:0.68rem;font-weight:600;line-height:1.1" title="${reasonTitle}">${reason}</span>`;
+      dateLabel   = primary.end_date
+        ? 'Until ' + fmtDate(primary.end_date)
+        : (todayBlocks.length > 1 ? '+' + (todayBlocks.length - 1) + ' more' : 'Indefinite');
+      actionLabel = 'tap to manage';
     } else {
       // Clean + idle (no booking in next 7 days)
       dogName = 'Ready'; dateLabel = ''; actionLabel = 'tap to add booking';
@@ -1016,13 +1029,14 @@ function renderKennels(bookings, cleanings, kennels) {
     } else if (display === 'ready') {
       cell.style.cursor = 'pointer';
       cell.onclick = () => openVacantKennelModal(k);
-    } else if (display === 'empty') {
+    } else if (display === 'blocked') {
       cell.style.cursor = 'pointer';
-      if (isBlocked) {
-        cell.onclick = () => openBlockedKennelModal(k, kennelMap[k].block_reason);
-      } else {
-        cell.onclick = () => openVacantKennelModal(k);
-      }
+      cell.onclick = () => openManageKennelBlocks(k);
+    } else if (display === 'empty') {
+      // (No longer reachable in practice — every non-active/dirty/upcoming kennel
+      // is either 'blocked' or 'ready' now — but kept as a safety net.)
+      cell.style.cursor = 'pointer';
+      cell.onclick = () => openVacantKennelModal(k);
     }
     grid.appendChild(cell);
   }
@@ -1548,6 +1562,30 @@ function exportHistoryCSV() {
 // ============================================================
 // ACTION: MANAGE BOOKING (D2 — replaces Log Check-Out)
 // ============================================================
+// ── Kennel block helpers ────────────────────────────────────────────
+// Returns all kennel_blocks rows that cover (kennelNum, dateStr).
+// A block matches when its start_date <= dateStr AND (end_date IS NULL OR end_date >= dateStr)
+// AND its kennel_number === kennelNum OR is NULL (all-kennels block).
+function getKennelBlocksOn(kennelNum, dateStr) {
+  return (_kennelBlocks || []).filter(b =>
+    (b.kennel_number === null || b.kennel_number === kennelNum) &&
+    b.start_date <= dateStr &&
+    (!b.end_date || b.end_date >= dateStr)
+  );
+}
+
+// Returns all blocks overlapping a date range for a specific kennel
+// (or any kennel when kennelNum is null).
+function getKennelBlocksOverlapping(kennelNum, startStr, endStr) {
+  return (_kennelBlocks || []).filter(b => {
+    const kennelMatch = (b.kennel_number === null) || (kennelNum === null) || (b.kennel_number === kennelNum);
+    if (!kennelMatch) return false;
+    // Ranges overlap when a.start <= b.end AND a.end >= b.start
+    const blockEnd = b.end_date || '9999-12-31';
+    return b.start_date <= endStr && blockEnd >= startStr;
+  });
+}
+
 // ── Booking chooser (opens when tapping an active/pending kennel block) ──
 function openLogCheckoutById(id) {
   const b = _bookings.find(x => x.id === id);
@@ -2021,12 +2059,10 @@ function openLogCheckin(booking) {
       }
     }
 
-    // Auto-clear any block on the affected kennels (using FINAL kennel numbers after move)
-    const finalKennels = new Set();
-    edits.forEach(e => finalKennels.add(e.newKennel));
-    for (const kn of finalKennels) {
-      await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', kn);
-    }
+    // Kennel blocks are now managed independently via the kennel_blocks table,
+    // so check-in no longer auto-clears anything. If the kennel was blocked but
+    // the booking went ahead anyway (override was confirmed), the block stays
+    // on the books for the manager to clean up explicitly.
 
     closeModal();
     const label = group.length > 1
@@ -2050,59 +2086,194 @@ function openVacantKennelModal(kennelNum) {
   openModal('K' + kennelNum + ' — Vacant', body, null);
 }
 
+// ── Kennel-block management (date-ranged, single or all kennels) ──────
+// Kept as an alias of the new add-block modal so existing callers
+// (openVacantKennelModal) continue to work.
 function openBlockKennel(kennelNum) {
-  const body = `
-    <div class="form-field">
-      <label>Reason (optional)</label>
-      <input type="text" id="f-block-reason" placeholder="e.g. Storage, Repairs">
-    </div>`;
-  openModal('Block Off K' + kennelNum, body, async () => {
-    const reason = document.getElementById('f-block-reason').value.trim() || null;
-    const { error } = await db.from('kennels').update({ blocked_off: true, block_reason: reason }).eq('kennel_number', kennelNum);
-    if (error) throw error;
-    closeModal();
-    showToast('K' + kennelNum + ' blocked off');
-    await loadAll();
-  }, 'Block Off');
+  openAddKennelBlock(kennelNum);
 }
 
-function openBlockedKennelModal(kennelNum, reason) {
+function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
+  const kennelOptions = [...Array(10)].map((_, i) =>
+    `<option value="${i+1}" ${(i+1) === defaultKennelNum ? 'selected' : ''}>K${i+1}</option>`
+  ).join('');
+  const start = defaultStartDate || todayStr();
   const body = `
-    <div style="margin-bottom:1rem;font-size:0.875rem;color:#64748b">
-      ${reason ? `Blocked: <strong>${reason}</strong>` : 'No reason given.'}
+    <div class="form-row-2">
+      <div class="form-field"><label>Apply to *</label>
+        <select id="f-block-kennel">
+          ${kennelOptions}
+          <option value="all" ${!defaultKennelNum ? 'selected' : ''}>All kennels</option>
+        </select>
+      </div>
+      <div class="form-field"><label>Reason *</label>
+        <input type="text" id="f-block-reason" placeholder="e.g. Storage, Renovations">
+      </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
-      <button class="btn btn-secondary" style="height:auto;padding:0.75rem"
-        onclick="closeModal();openEditBlockReason(${kennelNum},'${(reason||'').replace(/'/g,"\\'")}')">Edit Reason</button>
-      <button class="btn btn-danger" style="height:auto;padding:0.75rem"
-        onclick="closeModal();unblockKennel(${kennelNum})">Remove Block</button>
+    <div class="form-row-2">
+      <div class="form-field"><label>Start date *</label>
+        <input type="date" id="f-block-start" value="${start}">
+      </div>
+      <div class="form-field"><label>End date (blank = indefinite)</label>
+        <input type="date" id="f-block-end">
+      </div>
     </div>`;
-  openModal('K' + kennelNum + ' — Blocked', body, null);
+
+  openModal('Block off kennel', body, async () => {
+    const kennelSel = document.getElementById('f-block-kennel').value;
+    const reason    = document.getElementById('f-block-reason').value.trim();
+    const startDate = document.getElementById('f-block-start').value;
+    const endDate   = document.getElementById('f-block-end').value || null;
+
+    if (!reason)    throw new Error('Reason is required');
+    if (!startDate) throw new Error('Start date is required');
+    if (endDate && endDate < startDate) throw new Error('End date must be on or after start date');
+
+    const kennelNum = (kennelSel === 'all') ? null : parseInt(kennelSel, 10);
+
+    // Conflict check: any non-cancelled bookings overlapping this block?
+    const conflicts = _bookings.filter(b => {
+      if (b.status === 'cancelled') return false;
+      if (kennelNum !== null && b.kennel_number !== kennelNum) return false;
+      const bIn  = b.check_in_date;
+      const bOut = b.check_out_date;
+      if (!bIn || !bOut) return false;
+      const blkEnd = endDate || '9999-12-31';
+      return bIn <= blkEnd && bOut >= startDate;
+    });
+
+    if (conflicts.length) {
+      const lines = conflicts.slice(0, 10).map(b =>
+        `• ${b.dog_name} (K${b.kennel_number}) — ${fmtDate(b.check_in_date)} → ${fmtDate(b.check_out_date)} [${b.status}]`
+      ).join('\n');
+      const extra = conflicts.length > 10 ? `\n…and ${conflicts.length - 10} more.` : '';
+      const ok = confirm(`This block overlaps ${conflicts.length} existing booking${conflicts.length === 1 ? '' : 's'}:\n\n${lines}${extra}\n\nCreate the block anyway? You'll need to reschedule or cancel the overlapping bookings manually.`);
+      if (!ok) throw new Error('Cancelled by user');
+    }
+
+    const { error } = await db.from('kennel_blocks').insert({
+      kennel_number: kennelNum, start_date: startDate, end_date: endDate, reason,
+    });
+    if (error) throw error;
+
+    closeModal();
+    const where = kennelNum === null ? 'All kennels' : `K${kennelNum}`;
+    showToast(`${where} blocked off (${reason})`);
+    await loadAll();
+  }, 'Block off');
 }
 
-function openEditBlockReason(kennelNum, currentReason) {
+function openManageKennelBlocks(kennelNum) {
+  const td = todayStr();
+  // Active = overlapping today; upcoming = starting after today; all-kennels blocks included
+  const relevant = (_kennelBlocks || []).filter(b =>
+    (b.kennel_number === null || b.kennel_number === kennelNum)
+  ).sort((a, b) => a.start_date.localeCompare(b.start_date));
+
+  let listHtml = '';
+  if (!relevant.length) {
+    listHtml = '<div class="empty">No blocks on this kennel yet.</div>';
+  } else {
+    relevant.forEach(b => {
+      const isAll = b.kennel_number === null;
+      const dateRange = b.end_date
+        ? `${fmtDate(b.start_date)} → ${fmtDate(b.end_date)}`
+        : `From ${fmtDate(b.start_date)} (indefinite)`;
+      const scopeBadge = isAll
+        ? '<span class="badge badge-orange" style="font-size:0.6rem">All kennels</span>'
+        : `<span class="badge badge-gray" style="font-size:0.6rem">K${b.kennel_number}</span>`;
+      const activeNow = b.start_date <= td && (!b.end_date || b.end_date >= td);
+      const stateBadge = activeNow
+        ? '<span class="badge badge-red" style="font-size:0.6rem">Active</span>'
+        : (b.start_date > td
+            ? '<span class="badge badge-blue" style="font-size:0.6rem">Upcoming</span>'
+            : '<span class="badge badge-gray" style="font-size:0.6rem">Past</span>');
+      listHtml += `<div style="padding:0.5rem 0;border-bottom:1px solid #f1f5f9;display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.85rem"><strong>${(b.reason || '(no reason)').replace(/</g,'&lt;')}</strong> ${scopeBadge} ${stateBadge}</div>
+          <div style="font-size:0.75rem;color:#64748b;margin-top:0.15rem">${dateRange}</div>
+        </div>
+        <div style="display:flex;gap:0.3rem;flex-shrink:0">
+          <button class="btn-icon" title="Edit" onclick="closeModal();openEditKennelBlock('${b.id}')">✏</button>
+          <button class="btn-icon" title="Delete" onclick="deleteKennelBlock('${b.id}')" style="color:#b91c1c">🗑</button>
+        </div>
+      </div>`;
+    });
+  }
+
   const body = `
-    <div class="form-field">
-      <label>Reason</label>
-      <input type="text" id="f-block-reason" value="${currentReason}">
+    <div style="font-size:0.85rem;color:#475569;margin-bottom:0.5rem">Blocks affecting K${kennelNum} (including any all-kennel blocks):</div>
+    <div style="max-height:280px;overflow-y:auto">${listHtml}</div>
+    <div style="margin-top:0.75rem;padding-top:0.5rem;border-top:1px solid #e2e8f0">
+      <button class="btn btn-primary" onclick="closeModal();openAddKennelBlock(${kennelNum})">+ Add block on K${kennelNum}</button>
     </div>`;
-  openModal('Edit Block Reason — K' + kennelNum, body, async () => {
-    const reason = document.getElementById('f-block-reason').value.trim() || null;
-    const { error } = await db.from('kennels').update({ block_reason: reason }).eq('kennel_number', kennelNum);
+  openModal('K' + kennelNum + ' — Blocks', body, null);
+  document.getElementById('modal-footer').innerHTML = '<button class="btn btn-secondary" onclick="closeModal()">Close</button>';
+}
+
+function openEditKennelBlock(blockId) {
+  const b = (_kennelBlocks || []).find(x => x.id === blockId);
+  if (!b) { showToast('Block not found', 'error'); return; }
+  const kennelOptions = [...Array(10)].map((_, i) =>
+    `<option value="${i+1}" ${(i+1) === b.kennel_number ? 'selected' : ''}>K${i+1}</option>`
+  ).join('');
+  const body = `
+    <div class="form-row-2">
+      <div class="form-field"><label>Apply to *</label>
+        <select id="f-block-kennel">
+          ${kennelOptions}
+          <option value="all" ${b.kennel_number === null ? 'selected' : ''}>All kennels</option>
+        </select>
+      </div>
+      <div class="form-field"><label>Reason *</label>
+        <input type="text" id="f-block-reason" value="${(b.reason || '').replace(/"/g,'&quot;')}">
+      </div>
+    </div>
+    <div class="form-row-2">
+      <div class="form-field"><label>Start date *</label>
+        <input type="date" id="f-block-start" value="${b.start_date || ''}">
+      </div>
+      <div class="form-field"><label>End date (blank = indefinite)</label>
+        <input type="date" id="f-block-end" value="${b.end_date || ''}">
+      </div>
+    </div>`;
+
+  openModal('Edit kennel block', body, async () => {
+    const kennelSel = document.getElementById('f-block-kennel').value;
+    const reason    = document.getElementById('f-block-reason').value.trim();
+    const startDate = document.getElementById('f-block-start').value;
+    const endDate   = document.getElementById('f-block-end').value || null;
+    if (!reason)    throw new Error('Reason is required');
+    if (!startDate) throw new Error('Start date is required');
+    if (endDate && endDate < startDate) throw new Error('End date must be on or after start date');
+    const kennelNum = (kennelSel === 'all') ? null : parseInt(kennelSel, 10);
+
+    const { error } = await db.from('kennel_blocks').update({
+      kennel_number: kennelNum, start_date: startDate, end_date: endDate, reason,
+    }).eq('id', blockId);
     if (error) throw error;
     closeModal();
-    showToast('Block reason updated');
+    showToast('Block updated');
     await loadAll();
   });
 }
 
-async function unblockKennel(kennelNum) {
-  if (!confirm(`Remove block from K${kennelNum}?`)) return;
-  const { error } = await db.from('kennels').update({ blocked_off: false, block_reason: null }).eq('kennel_number', kennelNum);
-  if (error) { showToast('Error', 'error'); return; }
-  showToast('K' + kennelNum + ' unblocked');
+async function deleteKennelBlock(blockId) {
+  const b = (_kennelBlocks || []).find(x => x.id === blockId);
+  if (!b) return;
+  const where = b.kennel_number === null ? 'all kennels' : `K${b.kennel_number}`;
+  if (!confirm(`Delete this block on ${where} (${b.reason})?`)) return;
+  const { error } = await db.from('kennel_blocks').delete().eq('id', blockId);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast('Block removed');
+  // If the manage modal is still open, refresh it; otherwise just reload all
+  closeModal();
   await loadAll();
 }
+
+// Back-compat alias — older code may call unblockKennel(kennelNum). It now
+// opens the manage modal where you can pick which block to remove.
+function unblockKennel(kennelNum) { openManageKennelBlocks(kennelNum); }
 
 // ============================================================
 // REUSABLE: OWNER PICKER (typeahead dropdown over households)
@@ -2362,6 +2533,24 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     if (!dogs.length) throw new Error('At least one dog name is required');
     if (!cinDate || !coutDate) throw new Error('Check-in and check-out dates are required');
 
+    // Warn if any chosen kennel is blocked during the booking window.
+    // The user can still proceed — blocks are advisory, not enforced.
+    const blockWarnings = [];
+    for (const d of dogs) {
+      const blks = getKennelBlocksOverlapping(d.kennel, cinDate, coutDate);
+      if (blks.length) {
+        const reasons = blks.map(b => {
+          const range = b.end_date ? `${fmtDate(b.start_date)}→${fmtDate(b.end_date)}` : `from ${fmtDate(b.start_date)}, indefinite`;
+          return `${b.reason} (${range})`;
+        }).join('; ');
+        blockWarnings.push(`K${d.kennel} (${d.name}) — blocked: ${reasons}`);
+      }
+    }
+    if (blockWarnings.length) {
+      const ok = confirm(`The following kennels are blocked during this booking window:\n\n${blockWarnings.join('\n')}\n\nBook anyway?`);
+      if (!ok) throw new Error('Cancelled by user');
+    }
+
     let householdId = ownerHhId || null;
 
     // If user typed a name but didn't pick an existing one → create a new household
@@ -2537,9 +2726,8 @@ function renderKennelCalendar() {
     cleaningMap[`${c.kennel_number}|${c.scheduled_date}`] = c;
   });
 
-  // Blocked kennels (no per-date — applies whenever kennel is otherwise empty)
-  const blockedSet = new Set();
-  (_kennels || []).forEach(k => { if (k.blocked_off) blockedSet.add(k.kennel_number); });
+  // Date-aware blocked-kennel check uses getKennelBlocksOn(k, dateStr) per cell.
+  // (Replaces the old kennels.blocked_off boolean lookup which had no date scope.)
 
   // Build table
   let html = '<table class="kc-table"><thead><tr><th class="kc-corner kc-date-cell"></th>';
@@ -2585,10 +2773,15 @@ function renderKennelCalendar() {
         if (c.must_complete) cls += ' kc-clean-warning';
         label = '';
         attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning scheduled${c.must_complete ? ' (must complete: next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
-      } else if (blockedSet.has(k)) {
+      } else if (getKennelBlocksOn(k, ds).length) {
+        // Show the block reason inline instead of generic "Blocked" text
+        const blocksHere = getKennelBlocksOn(k, ds);
+        const primary    = blocksHere[0];
+        const reasonText = (primary.reason || '').replace(/</g,'&lt;');
+        const allReasons = blocksHere.map(b => b.reason).join(' · ').replace(/"/g,'&quot;');
         cls += ' kc-blocked';
-        label = 'Blocked';
-        attrs = `data-blocked="${k}"`;
+        label = reasonText;
+        attrs = `data-blocked="${k}" title="K${k} blocked: ${allReasons}"`;
       } else {
         cls += ' kc-empty';
         label = '+';
@@ -2629,9 +2822,8 @@ function renderKennelCalendar() {
         openAddBooking(parseInt(addK), ds);
       } else if (blockedK) {
         const kn = parseInt(blockedK);
-        const ken = (_kennels || []).find(x => x.kennel_number === kn);
         closeKennelCalendar();
-        openBlockedKennelModal(kn, ken ? ken.block_reason : null);
+        openManageKennelBlocks(kn);
       }
     });
   });
@@ -2758,10 +2950,6 @@ function kcxBuildGridCsv(from, to, opts) {
     });
   }
 
-  // Blocked
-  const blockedSet = new Set();
-  (_kennels || []).forEach(k => { if (k.blocked_off) blockedSet.add(k.kennel_number); });
-
   // Header
   const header = ['Date'];
   for (let k = 1; k <= 10; k++) header.push('K' + k);
@@ -2779,6 +2967,7 @@ function kcxBuildGridCsv(from, to, opts) {
     for (let k = 1; k <= 10; k++) {
       const arr = occ[`${k}|${ds}`];
       const cln = cleaningMap[`${k}|${ds}`];
+      const blks = getKennelBlocksOn(k, ds);
       let cell = '';
       if (arr && arr.length) {
         const names = arr.map(b => b.dog_name).join('+');
@@ -2787,9 +2976,8 @@ function kcxBuildGridCsv(from, to, opts) {
         if (primaryStatus === 'completed') cell = names + ' (completed)';
         else if (primaryStatus === 'cancelled') cell = names + ' (cancelled)';
         else cell = names;
-      } else if (blockedSet.has(k)) {
-        const ken = (_kennels || []).find(x => x.kennel_number === k);
-        cell = ken && ken.block_reason ? 'Blocked: ' + ken.block_reason : 'Blocked';
+      } else if (blks.length) {
+        cell = 'Blocked: ' + blks.map(b => b.reason).join(' · ');
       } else if (cln) {
         cell = 'Clean (scheduled)';
       }
