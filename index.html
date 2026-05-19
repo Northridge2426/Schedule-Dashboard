@@ -88,10 +88,10 @@
     .kennel-cell.ready    { background: #dcfce7; border-color: #86efac; cursor: pointer; }
     .kennel-cell.ready:hover { border-color: #4ade80; }
     .kennel-cell.empty    { background: #f8fafc; border-color: #e2e8f0; }
-    .kennel-cell.blocked  { background: repeating-linear-gradient(45deg, #fef3c7 0 6px, #fde68a 6px 12px); border-color: #fcd34d; cursor: pointer; }
-    .kennel-cell.blocked:hover { border-color: #f59e0b; }
-    .kennel-cell.blocked  .k-dog    { color: #92400e; }
-    .kennel-cell.blocked  .k-action { color: #92400e; }
+    .kennel-cell.blocked  { background: repeating-linear-gradient(45deg, #f1f5f9 0 6px, #e2e8f0 6px 12px); border-color: #cbd5e1; cursor: pointer; }
+    .kennel-cell.blocked:hover { border-color: #94a3b8; }
+    .kennel-cell.blocked  .k-dog    { color: #64748b; }
+    .kennel-cell.blocked  .k-action { color: #64748b; }
     .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
     .k-dog  { font-size: 0.75rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
     .k-date { font-size: 0.62rem; color: #94a3b8; margin-top: 0.2rem; }
@@ -999,7 +999,7 @@ function renderKennels(bookings, cleanings, kennels) {
       const primary  = todayBlocks[0];
       const reason   = (primary.reason || '').replace(/</g,'&lt;');
       const reasonTitle = todayBlocks.map(b => b.reason).join(' · ').replace(/"/g,'&quot;');
-      dogName     = `<span style="color:#92400e;font-size:0.68rem;font-weight:600;line-height:1.1" title="${reasonTitle}">${reason}</span>`;
+      dogName     = `<span style="color:#64748b;font-size:0.68rem;font-weight:600;line-height:1.1" title="${reasonTitle}">${reason}</span>`;
       dateLabel   = primary.end_date
         ? 'Until ' + fmtDate(primary.end_date)
         : (todayBlocks.length > 1 ? '+' + (todayBlocks.length - 1) + ' more' : 'Indefinite');
