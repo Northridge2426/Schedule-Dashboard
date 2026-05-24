@@ -230,6 +230,11 @@
     .kc-cell.kc-completed{ background: #f1f5f9; color: #64748b; }
     .kc-cell.kc-checkout { background: #dbeafe; color: #1d4ed8; }
     .kc-cell.kc-cancelled{ background: #fef2f2; color: #991b1b; text-decoration: line-through; }
+    /* Cancelled booking standalone cell — brown with strikethrough */
+    .kc-cell.kc-cancelled-brown { background: #92400e; color: #fef3c7; cursor: default; }
+    .kc-cell.kc-cancelled-brown s { text-decoration: line-through; color: #fde68a; }
+    /* Small strip appended inside a cell when a cancelled booking overlaps an active one */
+    .kc-cancelled-strip { font-size: 0.42rem; line-height: 1.2; background: rgba(120,53,15,0.30); color: #fde68a; margin: 1px -0.3rem -0.15rem; padding: 0 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: line-through; }
     .kc-cell.kc-blocked  { background: repeating-linear-gradient(45deg, #f1f5f9 0 6px, #e2e8f0 6px 12px); color: #64748b; cursor: pointer; font-size: 0.62rem; }
     .kc-cell.kc-span-mid { color: transparent; }
     .kc-cell.kc-clean-marker { position: relative; }
@@ -240,8 +245,8 @@
     .kc-cell.kc-clean-day.kc-clean-warning { background: #fecaca; color: #991b1b; }
     .kc-cell.kc-clean-day.kc-clean-warning::before { content: '⚠ 🧹'; }
     .kc-cell.kc-clean-marker.kc-clean-warning::after { content: '⚠'; color: #b91c1c; }
-    /* Completed cleaning on an empty day — brown/tan history marker */
-    .kc-cell.kc-clean-done { background: #d4a373; color: #4a2c0a; font-size: 0.65rem; cursor: default; }
+    /* Completed cleaning on an empty day — green history marker */
+    .kc-cell.kc-clean-done { background: #bbf7d0; color: #15803d; font-size: 0.65rem; cursor: default; }
     .kc-cell.kc-clean-done::before { content: '✓ 🧹'; }
     /* Completed cleaning overlapping a booking block — checkmark broom overlay */
     .kc-cell.kc-clean-done-marker::after { content: '✓🧹'; position: absolute; top: 1px; right: 2px; font-size: 0.55rem; line-height: 1; }
@@ -524,8 +529,10 @@
         <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#dcfce7"></span>Pending</span>
         <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#dbeafe"></span>Checkout</span>
         <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#f1f5f9"></span>Completed</span>
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#92400e"></span>Cancelled</span>
         <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:repeating-linear-gradient(45deg,#f1f5f9 0 4px,#e2e8f0 4px 8px)"></span>Blocked</span>
-        <span class="kc-legend-item">🧹 Cleaning</span>
+        <span class="kc-legend-item"><span class="kc-legend-swatch" style="background:#bbf7d0;border:1px solid #86efac"></span>✓ Cleaned</span>
+        <span class="kc-legend-item">🧹 Cleaning due</span>
       </div>
       <button class="kc-close" onclick="closeKennelCalendar()" aria-label="Close">×</button>
     </div>
@@ -2735,30 +2742,34 @@ function renderKennelCalendar() {
   const monthEnd   = kcDateStr(new Date(year, mIdx, daysInMonth));
   const today      = todayStr();
 
-  // Index bookings that intersect this month
-  // For each kennel and date, collect ALL bookings that occupy it (shared kennels = multiple)
-  const occupancy = {}; // key `${kennel}|${dateStr}` -> [booking, ...]
-  const startOfStay = {}; // key `${kennel}|${bookingId}` -> first visible date
+  // Index bookings that intersect this month — cancelled kept separate so active
+  // bookings always win styling/click, while cancelled show as a brown overlay.
+  const occupancy          = {}; // non-cancelled: `${kennel}|${dateStr}` -> [booking, ...]
+  const occupancyCancelled = {}; // cancelled only: same key structure
+  const startOfStay          = {}; // `${kennel}|${bookingId}` -> first visible date (non-cancelled)
+  const startOfStayCancelled = {}; // same for cancelled
+
   _bookings.forEach(b => {
     if (!b.check_in_date || !b.check_out_date) return;
-    if (b.status === 'cancelled') return;
-    // Skip if entire stay falls outside this month
     if (b.check_out_date < monthStart || b.check_in_date > monthEnd) return;
     const startD = b.check_in_date < monthStart ? monthStart : b.check_in_date;
     const endD   = b.check_out_date > monthEnd ? monthEnd : b.check_out_date;
-    const start = new Date(startD + 'T00:00:00');
-    const end   = new Date(endD + 'T00:00:00');
+    const start  = new Date(startD + 'T00:00:00');
+    const end    = new Date(endD   + 'T00:00:00');
+    const isCancelled = b.status === 'cancelled';
+    const occ = isCancelled ? occupancyCancelled : occupancy;
+    const sos = isCancelled ? startOfStayCancelled : startOfStay;
     let first = true;
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const ds = kcDateStr(d);
+      const ds  = kcDateStr(d);
       const key = `${b.kennel_number}|${ds}`;
-      if (!occupancy[key]) occupancy[key] = [];
-      occupancy[key].push(b);
-      if (first) { startOfStay[`${b.kennel_number}|${b.id}`] = ds; first = false; }
+      if (!occ[key]) occ[key] = [];
+      occ[key].push(b);
+      if (first) { sos[`${b.kennel_number}|${b.id}`] = ds; first = false; }
     }
   });
-  // Sort each cell's bookings so the most-meaningful one drives status/click
-  const statusRank = s => s === 'active' ? 4 : s === 'pending' ? 3 : s === 'completed' ? 2 : s === 'cancelled' ? 1 : 0;
+  // Sort active cells so highest-status booking drives colour/click
+  const statusRank = s => s === 'active' ? 4 : s === 'pending' ? 3 : s === 'completed' ? 2 : 0;
   Object.values(occupancy).forEach(arr => arr.sort((a, b) => statusRank(b.status) - statusRank(a.status)));
 
   // Index cleanings by `${kennel}|${date}` — use scheduled_date for pending,
@@ -2792,9 +2803,11 @@ function renderKennelCalendar() {
     html += `<tr class="${isToday ? 'kc-today' : ''}">`;
     html += `<td class="kc-date-cell${isWeekend ? ' kc-weekend' : ''}">${kcFmtRow(d)}</td>`;
     for (let k = 1; k <= 10; k++) {
-      const key = `${k}|${ds}`;
-      const bArr = occupancy[key];
-      const b = bArr ? bArr[0] : null; // primary booking drives styling/click
+      const key     = `${k}|${ds}`;
+      const bArr    = occupancy[key];
+      const bCancArr = occupancyCancelled[key];
+      const b    = bArr     ? bArr[0]     : null; // primary active booking
+      const bCanc = bCancArr ? bCancArr[0] : null; // primary cancelled booking
       const c = cleaningMap[key];
       let cls = 'kc-cell';
       let label = '';
@@ -2807,7 +2820,6 @@ function renderKennelCalendar() {
           : b.status === 'completed' ? 'kc-completed'
           : 'kc-cell';
         cls += ' ' + statusCls;
-        // "First day" of any booking in this cell = show names
         const showName = bArr.some(bk => startOfStay[`${k}|${bk.id}`] === ds);
         if (!showName) cls += ' kc-span-mid';
         const sharedFlag = bArr.some(bk => bk.notes && bk.notes.toLowerCase().includes('shared kennel'));
@@ -2815,18 +2827,33 @@ function renderKennelCalendar() {
         label = showName ? `${names}${sharedFlag ? '<span class="kc-cell-shared" title="Shared kennel">⚠</span>' : ''}` : '·';
         const titleNames = bArr.map(bk => `${bk.dog_name} (${bk.status})`).join(', ');
         attrs = `data-booking="${b.id}" title="K${k} — ${titleNames}"`;
+        // Cancelled booking overlay: small brown strip at the bottom of the cell
+        if (bCanc) {
+          const cShowName = bCancArr.some(bk => startOfStayCancelled[`${k}|${bk.id}`] === ds);
+          if (cShowName) {
+            const cNames = bCancArr.map(bk => bk.dog_name).join('+');
+            label += `<div class="kc-cancelled-strip">${cNames}</div>`;
+          }
+        }
+      } else if (bCanc) {
+        // Cancelled-only cell — brown with strikethrough
+        cls += ' kc-cancelled-brown';
+        const showName = bCancArr.some(bk => startOfStayCancelled[`${k}|${bk.id}`] === ds);
+        const cNames = bCancArr.map(bk => bk.dog_name).join('+');
+        label = showName ? `<s>${cNames}</s>` : '·';
+        const titleNames = bCancArr.map(bk => `${bk.dog_name} (cancelled)`).join(', ');
+        attrs = `title="K${k} — ${titleNames}"`;
       } else if (c) {
         // Cleaning on an otherwise-empty day
         if (c.status === 'completed') {
-          // Completed cleaning — show as brown history marker
+          // Completed cleaning — show as green history marker
           cls += ' kc-clean-done';
           label = '';
           attrs = `title="K${k} — Cleaning completed ${fmtDate(c.completed_date || c.scheduled_date)}: ${c.reason || ''}"`;
         } else {
-          // Pending/scheduled cleaning
+          // Pending/scheduled cleaning — warning only when auto-scheduler flagged it
           cls += ' kc-clean-day';
-          const tdStr = todayStr();
-          if (c.must_complete || (c.scheduled_date && c.scheduled_date <= tdStr)) cls += ' kc-clean-warning';
+          if (c.must_complete) cls += ' kc-clean-warning';
           label = '';
           attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning scheduled${c.must_complete ? ' (⚠ next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
         }
