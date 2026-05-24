@@ -235,11 +235,16 @@
     .kc-cell.kc-clean-marker { position: relative; }
     .kc-cell.kc-clean-marker::after { content: '🧹'; position: absolute; top: 1px; right: 3px; font-size: 0.6rem; line-height: 1; }
     /* Cleaning scheduled on an otherwise-empty day — render as a visible cleaning slot */
-    .kc-cell.kc-clean-day { background: #fef3c7; color: #92400e; font-size: 0.62rem; }
-    .kc-cell.kc-clean-day::before { content: 'Clean'; }
+    .kc-cell.kc-clean-day { background: #fef9c3; color: #92400e; font-size: 0.62rem; }
+    .kc-cell.kc-clean-day::before { content: '🧹'; }
     .kc-cell.kc-clean-day.kc-clean-warning { background: #fecaca; color: #991b1b; }
-    .kc-cell.kc-clean-day.kc-clean-warning::before { content: '⚠ Clean'; }
+    .kc-cell.kc-clean-day.kc-clean-warning::before { content: '⚠ 🧹'; }
     .kc-cell.kc-clean-marker.kc-clean-warning::after { content: '⚠'; color: #b91c1c; }
+    /* Completed cleaning on an empty day — brown/tan history marker */
+    .kc-cell.kc-clean-done { background: #d4a373; color: #4a2c0a; font-size: 0.65rem; cursor: default; }
+    .kc-cell.kc-clean-done::before { content: '✓ 🧹'; }
+    /* Completed cleaning overlapping a booking block — checkmark broom overlay */
+    .kc-cell.kc-clean-done-marker::after { content: '✓🧹'; position: absolute; top: 1px; right: 2px; font-size: 0.55rem; line-height: 1; }
     .kc-cell-shared { display: inline-block; font-size: 0.55rem; margin-left: 2px; vertical-align: super; }
 
     /* ---- Form elements (in modal) ---- */
@@ -754,11 +759,11 @@ async function loadAll() {
 
   const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
-    db.from('cleanings').select('*').not('status','in','("completed","skipped")').order('scheduled_date'),
+    db.from('cleanings').select('*').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
     db.from('reminders').select('*').eq('status','active').order('target_date', {nullsFirst: false}),
     db.from('shopping_items').select('*').eq('status','active').order('list_name').order('item'),
-    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,household_id)'),
+    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,household_id,off_site_pickup)'),
     db.from('households').select('*').order('owner_name'),
     db.from('kennels').select('*').order('kennel_number'),
     db.from('dogs').select('*').order('name'),
@@ -794,7 +799,9 @@ async function loadAll() {
 // the DB in the background.
 async function autoScheduleCleanings() {
   const td = todayStr();
-  if (!_cleanings.length) return;
+  // Only auto-schedule pending/scheduled cleanings (not completed or skipped)
+  const pendingCleanings = _cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped');
+  if (!pendingCleanings.length) return;
 
   // earliestFree[k]: earliest date the kennel is physically free to clean.
   // Active bookings keep the kennel occupied until their check_out_date.
@@ -816,7 +823,7 @@ async function autoScheduleCleanings() {
     });
 
   // Priority order: kennel with the soonest next check-in first.
-  const sorted = [..._cleanings].sort((a, b) => {
+  const sorted = [...pendingCleanings].sort((a, b) => {
     const aNext = nextCheckin[a.kennel_number] || '9999-12-31';
     const bNext = nextCheckin[b.kennel_number] || '9999-12-31';
     if (aNext !== bNext) return aNext.localeCompare(bNext);
@@ -839,8 +846,9 @@ async function autoScheduleCleanings() {
     let mustComplete = false;
 
     if (limit && limit <= earliest) {
-      // The kennel's next check-in is today (or earlier) — force-schedule today even
-      // if another cleaning is already on today.
+      // The kennel's next check-in is today (or past) — schedule as soon as the kennel
+      // is free (could be today if the active dog just checked out, or a future date if
+      // still occupied). Flag as must-complete so the cleaning shows red in all views.
       assigned = earliest;
       mustComplete = true;
     } else if (limit) {
@@ -1078,9 +1086,10 @@ function renderKennelDetails(bookings) {
   html += '<div class="kd-section"><div class="kd-label">Check-Ins Today</div>';
   if (ins.length) {
     ins.forEach(b => {
-      const t = b.check_in_time ? fmtTime(b.check_in_time) : 'TBD';
+      const t   = b.check_in_time ? fmtTime(b.check_in_time) : 'TBD';
+      const osp = b.off_site_pickup ? ' <span class="badge badge-purple">Off-site pickup</span>' : '';
       html += `<div class="today-row">
-        <div class="today-row-left">🟢 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${t}</span></div>
+        <div class="today-row-left">🟢 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${t}${osp}</span></div>
         <button class="btn btn-sm btn-success" onclick="openLogCheckin(${JSON.stringify(b).split('"').join("'")})">Check in</button>
       </div>`;
     });
@@ -1107,32 +1116,39 @@ function renderKennelDetails(bookings) {
 // CLEANINGS
 // ============================================================
 function renderCleanings(cleanings) {
-  document.getElementById('clean-count').textContent = cleanings.length;
-  if (!cleanings.length) {
+  // Only show pending/scheduled cleanings in this card (completed are shown in the calendar)
+  const pending = cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped');
+  document.getElementById('clean-count').textContent = pending.length;
+  if (!pending.length) {
     document.getElementById('cleanings-body').innerHTML = '<div class="empty">No pending cleanings.</div>';
     return;
   }
-  const td = todayStr();
+  const td  = todayStr();
+  const tmr = tomorrowStr();
   let html = '<table class="tbl"><thead><tr><th>K</th><th>Type</th><th>Date</th><th>Reason</th><th></th></tr></thead><tbody>';
-  // Show in priority order (earliest scheduled first; must_complete bubbled to top)
-  const ordered = [...cleanings].sort((a, b) => {
+  // Priority order: must_complete first, then by scheduled_date
+  const ordered = [...pending].sort((a, b) => {
     if (!!a.must_complete !== !!b.must_complete) return a.must_complete ? -1 : 1;
     const ad = a.scheduled_date || '9999-12-31';
     const bd = b.scheduled_date || '9999-12-31';
     return ad.localeCompare(bd);
   });
   ordered.forEach(c => {
-    const overdue   = c.scheduled_date && c.scheduled_date < td;
-    const mustNow   = !!c.must_complete; // day-before or same-day-as next check-in
-    const rowStyle  = mustNow ? 'background:#fef2f2' : '';
-    const dateColor = overdue ? '#ef4444' : (mustNow ? '#b91c1c' : 'inherit');
-    const dateIcon  = overdue ? ' ⚠' : (mustNow ? ' ⚠' : '');
-    const dateCell  = c.scheduled_date
-      ? `<span style="color:${dateColor};font-weight:${mustNow?'600':'400'}">${fmtDate(c.scheduled_date)}${dateIcon}</span>`
+    const overdue    = c.scheduled_date && c.scheduled_date < td;
+    const mustNow    = !!c.must_complete;
+    // Red if: overdue, must_complete, OR next check-in is today or tomorrow (within 24h)
+    const within24h  = c._next_checkin && (c._next_checkin <= tmr);
+    const isUrgent   = overdue || mustNow || within24h;
+    const rowStyle   = isUrgent ? 'background:#fef2f2' : '';
+    const dateColor  = isUrgent ? '#b91c1c' : 'inherit';
+    const dateWeight = isUrgent ? '600' : '400';
+    const dateIcon   = isUrgent ? ' ⚠' : '';
+    const dateCell   = c.scheduled_date
+      ? `<span style="color:${dateColor};font-weight:${dateWeight}">${fmtDate(c.scheduled_date)}${dateIcon}</span>`
       : '—';
-    const typeLabel = c.type === 'quick_refresh' ? '<span class="badge badge-blue">Quick</span>' : '<span class="badge badge-gray">Full</span>';
-    const warnNote  = mustNow && c._next_checkin
-      ? `<br><span style="color:#b91c1c;font-size:0.72rem;font-weight:600">⚠ Must clean — next check-in ${fmtDate(c._next_checkin)}</span>`
+    const typeLabel  = c.type === 'quick_refresh' ? '<span class="badge badge-blue">Quick</span>' : '<span class="badge badge-gray">Full</span>';
+    const warnNote   = isUrgent && c._next_checkin
+      ? `<br><span style="color:#b91c1c;font-size:0.72rem;font-weight:600">⚠ Next check-in ${fmtDate(c._next_checkin)}</span>`
       : '';
     html += `<tr style="${rowStyle}">
       <td><strong>K${c.kennel_number}</strong></td>
@@ -1157,7 +1173,8 @@ function invRowHtml(i) {
       <div style="font-size:0.875rem"><strong>${b ? b.dog_name : '?'}</strong> K${b ? b.kennel_number : '?'}</div>
       <div style="font-size:0.75rem;color:#94a3b8;margin-top:0.1rem">
         ${i.days_billed} day${i.days_billed!==1?'s':''}${i.weeks_billed?` (${i.weeks_billed} wk)`:''} · ${fmtDate(i.invoice_date)}
-        ${i.off_site_delivery?' · <span class="badge badge-purple" style="font-size:0.6rem">Off-site</span>':''}
+        ${b?.off_site_pickup?' · <span class="badge badge-purple" style="font-size:0.6rem">🚗 Pickup</span>':''}
+        ${i.off_site_delivery?' · <span class="badge badge-purple" style="font-size:0.6rem">🚗 Delivery</span>':''}
         ${i.outside_window_pickup?' · <span class="badge badge-orange" style="font-size:0.6rem">Outside win.</span>':''}
       </div>
     </div>
@@ -1399,6 +1416,7 @@ function renderInvoicePage() {
           : '<span class="badge badge-gray">Mixed</span>';
 
       // Flags: union across the group
+      const anyPickup   = invs.some(i => i.bookings?.off_site_pickup);
       const anyOffsite  = invs.some(i => i.off_site_delivery);
       const anyOutside  = invs.some(i => i.outside_window_pickup);
       const anyGrace    = invs.some(i => i.grace_extension_applied);
@@ -1437,8 +1455,9 @@ function renderInvoicePage() {
           <div>Invoice date: ${fmtDate(anyI.invoice_date)}</div>
           <div>${invs.length} dog${invs.length !== 1 ? 's' : ''}</div>
         </div>
-        ${(anyOffsite || anyOutside || anyGrace) ? `<div style="margin-bottom:0.5rem">
-          ${flagBadge(anyOffsite,'Off-site delivery','badge-purple')}
+        ${(anyPickup || anyOffsite || anyOutside || anyGrace) ? `<div style="margin-bottom:0.5rem">
+          ${flagBadge(anyPickup,'🚗 Off-site pickup','badge-purple')}
+          ${flagBadge(anyOffsite,'🚗 Off-site delivery','badge-purple')}
           ${flagBadge(anyOutside,'Outside-window pickup','badge-orange')}
           ${flagBadge(anyGrace,'Grace extension','badge-blue')}
           ${graceNotes ? `<div style="font-size:0.75rem;color:#64748b;margin-top:0.25rem">${graceNotes}</div>` : ''}
@@ -1509,7 +1528,8 @@ async function renderHistoryPage() {
     g.rows.forEach(b => {
       const inv = b.invoices?.[0] || null;
       const flags = [
-        inv?.off_site_delivery       ? '<span class="badge badge-purple" style="font-size:0.6rem">Off-site</span>' : '',
+        b.off_site_pickup            ? '<span class="badge badge-purple" style="font-size:0.6rem">🚗 Pickup</span>'   : '',
+        inv?.off_site_delivery       ? '<span class="badge badge-purple" style="font-size:0.6rem">🚗 Delivery</span>' : '',
         inv?.outside_window_pickup   ? '<span class="badge badge-orange" style="font-size:0.6rem">Out-win.</span>' : '',
         inv?.grace_extension_applied ? '<span class="badge badge-blue"   style="font-size:0.6rem">Grace</span>'   : '',
       ].filter(Boolean).join(' ');
@@ -1536,7 +1556,7 @@ async function renderHistoryPage() {
 function exportHistoryCSV() {
   if (!_historyRows.length) { showToast('No history to export', 'error'); return; }
   const cols = ['Dog','Kennel','Check-In Date','Check-In Time','Check-Out Date','Check-Out Time',
-    'Days Billed','Weeks Billed','Off-Site Delivery','Outside-Window Pickup','Grace Extension','Grace Notes','Invoice Status'];
+    'Days Billed','Weeks Billed','Off-Site Pickup','Off-Site Delivery','Outside-Window Pickup','Grace Extension','Grace Notes','Invoice Status'];
   const rows = _historyRows.map(b => {
     const inv = b.invoices?.[0] || {};
     return [
@@ -1544,6 +1564,7 @@ function exportHistoryCSV() {
       b.check_in_date, b.check_in_time || '',
       b.check_out_date, b.check_out_time || '',
       inv.days_billed ?? '', inv.weeks_billed ?? '',
+      b.off_site_pickup ? 'Yes' : 'No',
       inv.off_site_delivery ? 'Yes' : 'No',
       inv.outside_window_pickup ? 'Yes' : 'No',
       inv.grace_extension_applied ? 'Yes' : 'No',
@@ -1763,7 +1784,8 @@ function openLogCheckout(booking) {
       <div class="form-field"><label>Check-out time</label><input type="time" id="f-out-time" value="${b.check_out_time ? b.check_out_time.slice(0,5) : ''}"></div>
     </div>
     <div class="form-field">
-      <div class="form-check"><input type="checkbox" id="f-offsite" ${b.notes&&b.notes.toLowerCase().includes('off-site')?'checked':''}><label for="f-offsite">Off-site delivery</label></div>
+      <div class="form-check"><input type="checkbox" id="f-pickup" ${b.off_site_pickup?'checked':''}><label for="f-pickup">🚗 Off-site pickup (collected dog at check-in)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-offsite"><label for="f-offsite">🚗 Off-site delivery (dropping dog off at checkout)</label></div>
       <div class="form-check"><input type="checkbox" id="f-outside"><label for="f-outside">Outside-window pickup</label></div>
       <div class="form-check"><input type="checkbox" id="f-grace" onchange="toggleGraceNotes(this)"><label for="f-grace">Grace extension applied</label></div>
     </div>
@@ -1775,8 +1797,12 @@ function openLogCheckout(booking) {
   openModal('Manage Booking: ' + b.dog_name + ' — K' + b.kennel_number, body, null);
 
   const checkoutLabel = isCompleted ? 'Create Invoice' : 'Check Out';
+  const cancelBtn = !isCompleted
+    ? `<button class="btn btn-danger" id="mb-cancel-btn" onclick="cancelBooking('${b.id}')" style="margin-right:auto">Cancel Booking</button>`
+    : '';
   document.getElementById('modal-footer').innerHTML = `
-    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    ${cancelBtn}
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     <button class="btn btn-secondary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save</button>
     <button class="btn btn-primary" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">${checkoutLabel}</button>`;
 }
@@ -1862,6 +1888,16 @@ async function manageBookingSave(bookingId) {
       }
     }
 
+    // Save off_site_pickup flag on the booking(s)
+    const pickupEl = document.getElementById('f-pickup');
+    if (pickupEl !== null) {
+      const pickup = pickupEl.checked;
+      let pickupUpd = db.from('bookings').update({ off_site_pickup: pickup });
+      if (b && b.booking_group_id) pickupUpd = pickupUpd.eq('booking_group_id', b.booking_group_id);
+      else pickupUpd = pickupUpd.eq('id', bookingId);
+      await pickupUpd;
+    }
+
     // Retroactive billing: update existing invoice if dates changed
     if (inDate && outDate) {
       const days  = computeBillingDays(inDate, inTime, outDate, outTime);
@@ -1898,6 +1934,7 @@ async function manageBookingCheckout(bookingId) {
     const inTime   = document.getElementById('f-in-time').value  || b?.check_in_time;
     const outDate  = document.getElementById('f-out-date').value || todayStr();
     const outTime  = document.getElementById('f-out-time').value;
+    const pickup   = document.getElementById('f-pickup')?.checked ?? false;
     const offsite  = document.getElementById('f-offsite').checked;
     const outside  = document.getElementById('f-outside').checked;
     const grace    = document.getElementById('f-grace').checked;
@@ -1921,6 +1958,7 @@ async function manageBookingCheckout(bookingId) {
       check_in_date:  inDate,
       check_out_date: outDate,
       check_out_time: outTime,
+      off_site_pickup: pickup,
       status: 'completed',
       updated_at: new Date().toISOString(),
     }).in('id', bookingIds);
@@ -2004,11 +2042,15 @@ function openLogCheckin(booking) {
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || todayStr()}"></div>
       <div class="form-field"><label>Check-in time *</label><input type="time" id="f-in-time" value="${b.check_in_time || ''}"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-pickup" ${b.off_site_pickup ? 'checked' : ''}><label for="f-pickup">🚗 Off-site pickup (went to collect the dog)</label></div>
     </div>`;
 
   openModal('Log Check-In: ' + b.dog_name, body, async () => {
-    const inDate = document.getElementById('f-in-date').value;
-    const inTime = document.getElementById('f-in-time').value;
+    const inDate  = document.getElementById('f-in-date').value;
+    const inTime  = document.getElementById('f-in-time').value;
+    const pickup  = document.getElementById('f-pickup').checked;
     if (!inTime) throw new Error('Check-in time is required');
 
     // Read per-dog kennel edits + run conflict check against the (possibly new) check-in date
@@ -2036,11 +2078,12 @@ function openLogCheckin(booking) {
       }
     }
 
-    // Cascade check-in (date/time + status) to all dogs in the same group
+    // Cascade check-in (date/time + status + pickup flag) to all dogs in the same group
     const bookingIds = group.map(x => x.id);
     const { error } = await db.from('bookings').update({
       check_in_date: inDate,
       check_in_time: inTime,
+      off_site_pickup: pickup,
       status: 'active',
       updated_at: new Date().toISOString(),
     }).in('id', bookingIds);
@@ -2718,12 +2761,18 @@ function renderKennelCalendar() {
   const statusRank = s => s === 'active' ? 4 : s === 'pending' ? 3 : s === 'completed' ? 2 : s === 'cancelled' ? 1 : 0;
   Object.values(occupancy).forEach(arr => arr.sort((a, b) => statusRank(b.status) - statusRank(a.status)));
 
-  // Index cleanings by `${kennel}|${date}`
+  // Index cleanings by `${kennel}|${date}` — use scheduled_date for pending,
+  // completed_date for completed (so history shows on the actual cleaning day).
   const cleaningMap = {};
   _cleanings.forEach(c => {
-    if (!c.scheduled_date) return;
-    if (c.scheduled_date < monthStart || c.scheduled_date > monthEnd) return;
-    cleaningMap[`${c.kennel_number}|${c.scheduled_date}`] = c;
+    const dateKey = (c.status === 'completed' && c.completed_date) ? c.completed_date : c.scheduled_date;
+    if (!dateKey) return;
+    if (dateKey < monthStart || dateKey > monthEnd) return;
+    const mapKey = `${c.kennel_number}|${dateKey}`;
+    // Prefer pending over completed if both land on same day/kennel
+    if (!cleaningMap[mapKey] || c.status !== 'completed') {
+      cleaningMap[mapKey] = c;
+    }
   });
 
   // Date-aware blocked-kennel check uses getKennelBlocksOn(k, dateStr) per cell.
@@ -2767,12 +2816,20 @@ function renderKennelCalendar() {
         const titleNames = bArr.map(bk => `${bk.dog_name} (${bk.status})`).join(', ');
         attrs = `data-booking="${b.id}" title="K${k} — ${titleNames}"`;
       } else if (c) {
-        // Cleaning scheduled on an otherwise-empty (no-booking) day — show as a
-        // distinct "clean day" cell so the schedule is visible in the expanded view.
-        cls += ' kc-clean-day';
-        if (c.must_complete) cls += ' kc-clean-warning';
-        label = '';
-        attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning scheduled${c.must_complete ? ' (must complete: next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
+        // Cleaning on an otherwise-empty day
+        if (c.status === 'completed') {
+          // Completed cleaning — show as brown history marker
+          cls += ' kc-clean-done';
+          label = '';
+          attrs = `title="K${k} — Cleaning completed ${fmtDate(c.completed_date || c.scheduled_date)}: ${c.reason || ''}"`;
+        } else {
+          // Pending/scheduled cleaning
+          cls += ' kc-clean-day';
+          const tdStr = todayStr();
+          if (c.must_complete || (c.scheduled_date && c.scheduled_date <= tdStr)) cls += ' kc-clean-warning';
+          label = '';
+          attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning scheduled${c.must_complete ? ' (⚠ next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
+        }
       } else if (getKennelBlocksOn(k, ds).length) {
         // Show the block reason inline instead of generic "Blocked" text
         const blocksHere = getKennelBlocksOn(k, ds);
@@ -2788,8 +2845,12 @@ function renderKennelCalendar() {
         attrs = `data-add-kennel="${k}" data-add-date="${ds}"`;
       }
       if (c && b) {
-        cls += ' kc-clean-marker';
-        if (c.must_complete) cls += ' kc-clean-warning';
+        if (c.status === 'completed') {
+          cls += ' kc-clean-done-marker';
+        } else {
+          cls += ' kc-clean-marker';
+          if (c.must_complete) cls += ' kc-clean-warning';
+        }
       }
       html += `<td class="${cls}" ${attrs}>${label}</td>`;
     }
@@ -2812,7 +2873,7 @@ function renderKennelCalendar() {
         if (b) { closeKennelCalendar(); openBookingChooser(b.id); }
       } else if (cleaningId) {
         const c = _cleanings.find(x => x.id === cleaningId);
-        if (c && confirm(`Mark K${c.kennel_number} cleaning done?`)) {
+        if (c && c.status !== 'completed' && confirm(`Mark K${c.kennel_number} cleaning done?`)) {
           closeKennelCalendar();
           markCleaningDone(c.id, c.kennel_number);
         }
@@ -3715,6 +3776,28 @@ function openMergeCustomer(sourceId) {
          and consolidate <strong>${dupCount}</strong> duplicate${dupCount === 1 ? '' : 's'} into <strong>${existing.owner_name}</strong>.`;
     },
   });
+}
+
+// ============================================================
+// ACTION: CANCEL BOOKING
+// ============================================================
+async function cancelBooking(bookingId) {
+  const b = _bookings.find(x => x.id === bookingId);
+  if (!b) return;
+  const label = b.dog_name + ' (K' + b.kennel_number + ')';
+  if (!confirm(`Cancel the booking for ${label}? This cannot be undone.`)) return;
+
+  // Cancel all bookings in the group
+  const groupId = b.booking_group_id;
+  let upd = db.from('bookings').update({ status: 'cancelled', updated_at: new Date().toISOString() });
+  if (groupId) upd = upd.eq('booking_group_id', groupId);
+  else upd = upd.eq('id', bookingId);
+  const { error } = await upd;
+  if (error) { showToast(error.message, 'error'); return; }
+
+  closeModal();
+  showToast(`Booking cancelled: ${label}`);
+  await loadAll();
 }
 
 // ============================================================
