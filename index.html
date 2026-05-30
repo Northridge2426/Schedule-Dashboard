@@ -341,6 +341,7 @@
   </div>
   <div id="more-dropdown" class="more-dropdown">
     <button class="more-btn" id="more-reminders" onclick="switchTab('reminders')">Reminders</button>
+    <button class="more-btn" id="more-notes" onclick="switchTab('notes')">Notes</button>
     <button class="more-btn" id="more-shopping" onclick="switchTab('shopping')">Shopping</button>
     <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
@@ -391,6 +392,23 @@
           <button class="btn-add" onclick="openAddReminder()">+ Add</button>
         </div>
         <div class="card-body" id="reminders-body"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- NOTES PAGE -->
+  <div id="notes-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header">
+          <h2>Notes</h2>
+          <div class="card-header-right">
+            <select id="notes-cat-filter" onchange="setNoteCatFilter(this.value)" style="font-size:0.8rem;padding:0.3rem 0.4rem;border:1px solid #e2e8f0;border-radius:6px"></select>
+            <button class="btn-add" onclick="openManageNoteCategories()">Categories</button>
+            <button class="btn-add" onclick="openAddNote()">+ Add</button>
+          </div>
+        </div>
+        <div class="card-body" id="notes-body"><div class="loading">Loading…</div></div>
       </div>
     </div>
   </div>
@@ -554,7 +572,9 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // ============================================================
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
     _shopping = [], _invoices = [], _households = [], _kennels = [],
-    _dogs = [], _routines = [], _kennelBlocks = [];
+    _dogs = [], _routines = [], _kennelBlocks = [],
+    _notes = [], _noteCategories = [];
+let _noteCatFilter = 'all';
 let _currentDogId = null;
 let _vaccRecords = []; // vaccination_records for _currentDogId (loaded lazily)
 let _completions = new Set();
@@ -764,7 +784,7 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks, rNotes, rNoteCats] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
@@ -776,6 +796,8 @@ async function loadAll() {
     db.from('dogs').select('*').order('name'),
     db.from('routines').select('*').eq('active', true).order('sort_order'),
     db.from('kennel_blocks').select('*').order('start_date'),
+    db.from('notes').select('*').eq('status','active').order('created_at', {ascending: false}),
+    db.from('note_categories').select('*').order('sort_order').order('name'),
   ]);
 
   _bookings     = rBook.data   || [];
@@ -789,6 +811,8 @@ async function loadAll() {
   _dogs         = rDogs.data   || [];
   _routines     = rRout.data   || [];
   _kennelBlocks = rBlocks.data || [];
+  _notes        = rNotes.data  || [];
+  _noteCategories = rNoteCats.data || [];
 
   // Auto-schedule pending cleanings: earliest date possible, max 1/day, prioritized
   // by each kennel's next check-in. Cleanings that must happen before an imminent
@@ -820,48 +844,73 @@ async function autoScheduleCleanings() {
     }
   });
 
-  // nextCheckin[k]: earliest upcoming pending check-in date for the kennel
-  // (used to prioritise cleanings and to detect must-complete urgency).
-  const nextCheckin = {};
-  _bookings.filter(b => b.status === 'pending' && b.check_in_date && b.check_in_date >= td)
-    .forEach(b => {
-      const cur = nextCheckin[b.kennel_number];
-      if (!cur || b.check_in_date < cur) nextCheckin[b.kennel_number] = b.check_in_date;
-    });
+  const bookingById = {};
+  _bookings.forEach(b => { bookingById[b.id] = b; });
 
-  // Priority order: kennel with the soonest next check-in first.
-  const sorted = [...pendingCleanings].sort((a, b) => {
-    const aNext = nextCheckin[a.kennel_number] || '9999-12-31';
-    const bNext = nextCheckin[b.kennel_number] || '9999-12-31';
+  const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0,10); };
+  // Earliest pending check-in for a kennel on/after a given date (the dog that
+  // arrives *after* this cleaning — used to flag tight turnarounds as urgent).
+  const nextCheckinOnOrAfter = (k, fromDate) => {
+    let best = null;
+    _bookings.filter(b => b.status === 'pending' && b.kennel_number === k && b.check_in_date && b.check_in_date >= fromDate)
+      .forEach(b => { if (!best || b.check_in_date < best) best = b.check_in_date; });
+    return best;
+  };
+
+  // Split cleanings into:
+  //  • anchored — linked to a still-open booking (pending/active): pin the cleaning
+  //    to that booking's checkout day so future cleanings appear on the right date.
+  //  • legacy   — no live booking link (kennel already free / booking completed):
+  //    pack into the earliest free day, max 1/day, as before.
+  const anchored = [], legacy = [];
+  for (const c of pendingCleanings) {
+    const lb = c.booking_id ? bookingById[c.booking_id] : null;
+    if (lb && (lb.status === 'pending' || lb.status === 'active') &&
+        lb.check_out_date && lb.check_out_date >= lb.check_in_date) {
+      anchored.push({ c, lb });
+    } else {
+      legacy.push(c);
+    }
+  }
+
+  const dayCounts = {};
+  const writebacks = [];
+
+  for (const { c, lb } of anchored) {
+    const assigned = lb.check_out_date;
+    dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
+    const nc = nextCheckinOnOrAfter(c.kennel_number, assigned);
+    // Red/must-complete when the cleaning day is already today/overdue, or a
+    // check-in lands on the cleaning day or the day after (tight turnaround).
+    const mustComplete = (assigned <= td) || (!!nc && nc <= addDays(assigned, 1));
+    const prev = c.scheduled_date;
+    c.scheduled_date = assigned;
+    c.must_complete  = mustComplete;
+    c._next_checkin  = nc || null;
+    if (prev !== assigned) writebacks.push({ id: c.id, scheduled_date: assigned });
+  }
+
+  // Priority order for legacy: kennel with the soonest next check-in first.
+  const sorted = [...legacy].sort((a, b) => {
+    const aNext = nextCheckinOnOrAfter(a.kennel_number, td) || '9999-12-31';
+    const bNext = nextCheckinOnOrAfter(b.kennel_number, td) || '9999-12-31';
     if (aNext !== bNext) return aNext.localeCompare(bNext);
-    // tie-break by current scheduled_date (or created_at)
     const aKey = a.scheduled_date || (a.created_at || '').slice(0,10) || '9999';
     const bKey = b.scheduled_date || (b.created_at || '').slice(0,10) || '9999';
     return aKey.localeCompare(bKey);
   });
 
-  // Day-budget: track how many cleanings we've assigned to each date so we can
-  // try to keep "max 1/day wherever possible".
-  const dayCounts = {};
-  const writebacks = [];
-
   for (const c of sorted) {
     const earliest = earliestFree[c.kennel_number];
-    const limit    = nextCheckin[c.kennel_number]; // cleaning must finish by this date
+    const limit    = nextCheckinOnOrAfter(c.kennel_number, td); // cleaning must finish by this date
 
     let assigned;
     let mustComplete = false;
 
     if (limit && limit <= earliest) {
-      // The kennel's next check-in is today (or past) — schedule as soon as the kennel
-      // is free (could be today if the active dog just checked out, or a future date if
-      // still occupied). Flag as must-complete so the cleaning shows red in all views.
       assigned = earliest;
       mustComplete = true;
     } else if (limit) {
-      // Try every date from earliest up to (limit-1); pick the earliest day with
-      // zero other cleanings already booked. If no slot is empty, fall back to the
-      // earliest possible date (doubling-up on that day).
       const limitDt = new Date(limit + 'T12:00:00');
       let cursor = new Date(earliest + 'T12:00:00');
       let firstAvailable = null;
@@ -873,13 +922,9 @@ async function autoScheduleCleanings() {
         cursor.setDate(cursor.getDate() + 1);
       }
       assigned = firstAvailable || firstAny || earliest;
-
-      // Warning: scheduled on the day-before next check-in (or same day forced)
       const dayBefore = new Date(limitDt); dayBefore.setDate(dayBefore.getDate() - 1);
-      const dayBeforeStr = dayBefore.toISOString().slice(0,10);
-      if (assigned >= dayBeforeStr) mustComplete = true;
+      if (assigned >= dayBefore.toISOString().slice(0,10)) mustComplete = true;
     } else {
-      // No upcoming check-in — pick the earliest day with no other cleaning yet.
       let cursor = new Date(earliest + 'T12:00:00');
       while (dayCounts[cursor.toISOString().slice(0,10)]) {
         cursor.setDate(cursor.getDate() + 1);
@@ -888,8 +933,8 @@ async function autoScheduleCleanings() {
     }
 
     dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
+    if (assigned <= td) mustComplete = true;
 
-    // Update in-memory cleaning so renders see the new state immediately
     const prev = c.scheduled_date;
     c.scheduled_date = assigned;
     c.must_complete  = mustComplete;
@@ -918,6 +963,7 @@ function renderAll() {
   renderCleanings(_cleanings);
   renderInvoices(_invoices, _bookings);
   renderReminders(_reminders);
+  renderNotes();
   renderShopping();
   renderTasks(_tasks);
 }
@@ -1283,6 +1329,148 @@ function renderReminders(reminders) {
     </div>`;
   });
   el.innerHTML = html;
+}
+
+// ============================================================
+// NOTES (functions like Reminders, with categories)
+// ============================================================
+function noteCategoryNames() {
+  const fromCats = (_noteCategories || []).map(c => c.name);
+  const fromNotes = (_notes || []).map(n => n.category).filter(Boolean);
+  const set = new Set(['General', ...fromCats, ...fromNotes]);
+  return [...set];
+}
+
+function setNoteCatFilter(v) { _noteCatFilter = v; renderNotes(); }
+
+function renderNotes() {
+  const el = document.getElementById('notes-body');
+  if (!el) return;
+
+  // Populate the category filter dropdown (preserve current selection)
+  const cats = noteCategoryNames();
+  const filterSel = document.getElementById('notes-cat-filter');
+  if (filterSel) {
+    const opts = ['<option value="all">All categories</option>']
+      .concat(cats.map(c => `<option value="${c.replace(/"/g,'&quot;')}">${c}</option>`));
+    filterSel.innerHTML = opts.join('');
+    if (cats.includes(_noteCatFilter) || _noteCatFilter === 'all') filterSel.value = _noteCatFilter;
+    else _noteCatFilter = 'all';
+  }
+
+  let notes = [...(_notes || [])];
+  if (_noteCatFilter && _noteCatFilter !== 'all') notes = notes.filter(n => (n.category || 'General') === _noteCatFilter);
+
+  if (!notes.length) { el.innerHTML = '<div class="empty">No notes.</div>'; return; }
+
+  // Pinned first, then newest first
+  notes.sort((a, b) => {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+    return (b.created_at || '').localeCompare(a.created_at || '');
+  });
+
+  // Group by category for readability
+  const groups = {};
+  notes.forEach(n => { const c = n.category || 'General'; (groups[c] = groups[c] || []).push(n); });
+
+  let html = '';
+  Object.keys(groups).sort().forEach(cat => {
+    html += `<div class="kd-label" style="margin-top:0.5rem">${cat}</div>`;
+    groups[cat].forEach(n => {
+      const pinStyle = n.pinned ? 'background:#fffbeb;border-radius:6px;margin:0 -0.25rem;padding:0.35rem 0.25rem;' : '';
+      const pinBtnStyle = n.pinned ? 'background:#fef3c7;color:#92400e;border-radius:5px;' : '';
+      html += `<div class="reminder-row" style="${pinStyle}">
+        <div class="reminder-text">${n.pinned ? '📌 ' : ''}${(n.text || '').replace(/</g,'&lt;')}</div>
+        <button class="btn-icon" title="${n.pinned ? 'Unpin' : 'Pin to top'}" onclick="toggleNotePin('${n.id}',${!!n.pinned})" style="${pinBtnStyle}">📌</button>
+        <button class="btn-icon" title="Edit" onclick="openEditNote('${n.id}')">✏</button>
+        <button class="btn-icon" title="Delete" onclick="deleteNote('${n.id}')">×</button>
+      </div>`;
+    });
+  });
+  el.innerHTML = html;
+}
+
+function noteCategorySelectHTML(id, selected) {
+  const cats = noteCategoryNames();
+  return `<select id="${id}">${cats.map(c =>
+    `<option value="${c.replace(/"/g,'&quot;')}" ${c === selected ? 'selected' : ''}>${c}</option>`
+  ).join('')}</select>`;
+}
+
+function openAddNote() {
+  const body = `
+    <div class="form-field"><label>Note *</label><textarea id="f-note-text" rows="3" placeholder="What do you want to jot down?"></textarea></div>
+    <div class="form-field"><label>Category</label>${noteCategorySelectHTML('f-note-cat', _noteCatFilter !== 'all' ? _noteCatFilter : 'General')}</div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-note-pin"><label for="f-note-pin">📌 Pin to top</label></div>
+    </div>`;
+  openModal('Add Note', body, async () => {
+    const text = document.getElementById('f-note-text').value.trim();
+    const category = document.getElementById('f-note-cat').value || 'General';
+    const pinned = document.getElementById('f-note-pin').checked;
+    if (!text) throw new Error('Note text is required');
+    const { error } = await db.from('notes').insert({ text, category, pinned, status: 'active' });
+    if (error) throw error;
+    closeModal();
+    showToast('Note added');
+    await loadAll();
+  });
+}
+
+function openEditNote(id) {
+  const n = (_notes || []).find(x => x.id === id);
+  if (!n) return;
+  const body = `
+    <div class="form-field"><label>Note *</label><textarea id="f-note-text" rows="3">${(n.text || '').replace(/</g,'&lt;')}</textarea></div>
+    <div class="form-field"><label>Category</label>${noteCategorySelectHTML('f-note-cat', n.category || 'General')}</div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-note-pin" ${n.pinned ? 'checked' : ''}><label for="f-note-pin">📌 Pin to top</label></div>
+    </div>`;
+  openModal('Edit Note', body, async () => {
+    const text = document.getElementById('f-note-text').value.trim();
+    const category = document.getElementById('f-note-cat').value || 'General';
+    const pinned = document.getElementById('f-note-pin').checked;
+    if (!text) throw new Error('Note text is required');
+    const { error } = await db.from('notes').update({ text, category, pinned }).eq('id', id);
+    if (error) throw error;
+    closeModal();
+    showToast('Note updated');
+    await loadAll();
+  });
+}
+
+async function toggleNotePin(id, currentPinned) {
+  const { error } = await db.from('notes').update({ pinned: !currentPinned }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  await loadAll();
+}
+
+async function deleteNote(id) {
+  if (!confirm('Delete this note?')) return;
+  const { error } = await db.from('notes').update({ status: 'dismissed' }).eq('id', id);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast('Note deleted');
+  await loadAll();
+}
+
+function openManageNoteCategories() {
+  const cats = noteCategoryNames();
+  const list = cats.map(c => `<div style="padding:0.3rem 0;border-bottom:1px solid #f1f5f9;font-size:0.875rem">${c}</div>`).join('');
+  const body = `
+    <div class="form-field"><label>New category</label>
+      <input type="text" id="f-new-cat" placeholder="e.g. Trading, Media, Learning">
+    </div>
+    <div style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.5rem 0 0.25rem">Existing</div>
+    ${list}`;
+  openModal('Note Categories', body, async () => {
+    const name = document.getElementById('f-new-cat').value.trim();
+    if (!name) throw new Error('Enter a category name');
+    const { error } = await db.from('note_categories').insert({ name });
+    if (error && !String(error.message || '').includes('duplicate')) throw error;
+    closeModal();
+    showToast('Category added');
+    await loadAll();
+  });
 }
 
 // ============================================================
@@ -1875,6 +2063,32 @@ async function manageBookingSave(bookingId) {
     }
     const { error } = await upd;
     if (error) throw error;
+
+    // Item 6: if checkout was moved EARLIER, record the dropped days as a cancelled
+    // stub booking so they render browned-out on the calendar (and the days free up
+    // for reuse). Stub spans the day after the new checkout through the original
+    // checkout, per kennel in the group.
+    if (outDate && b && b.check_out_date && outDate < b.check_out_date && b.status !== 'completed') {
+      const droppedStart = (() => { const d = new Date(outDate + 'T12:00:00'); d.setDate(d.getDate() + 1); return d.toISOString().slice(0,10); })();
+      const origOut = b.check_out_date;
+      if (droppedStart <= origOut) {
+        const stubs = group.map(g => ({
+          dog_name: g.dog_name,
+          dog_id: g.dog_id || null,
+          kennel_number: g.kennel_number,
+          check_in_date: droppedStart,
+          check_out_date: origOut,
+          status: 'cancelled',
+          household_id: g.household_id || null,
+          booking_group_id: g.booking_group_id || null,
+          notes: `Cancelled — booking shortened (original checkout ${origOut})`,
+        }));
+        if (stubs.length) {
+          const { error: stubErr } = await db.from('bookings').insert(stubs);
+          if (stubErr) throw stubErr;
+        }
+      }
+    }
 
     // 2) Apply per-dog kennel moves (one row at a time so we don't cascade)
     for (const e of edits) {
@@ -2657,8 +2871,35 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       booking_group_id: groupId,
       notes: notesFull,
     }));
-    const { error } = await db.from('bookings').insert(rowsToInsert);
+    const { data: insertedBookings, error } = await db.from('bookings').insert(rowsToInsert).select();
     if (error) throw error;
+
+    // Pre-book the post-checkout cleaning now (don't wait until checkout) so it
+    // shows in Pending Cleanings + the expanded calendar straight away. One per
+    // distinct kennel in the booking window; skip if one already exists there.
+    const seenKennels = new Set();
+    for (const ib of (insertedBookings || [])) {
+      if (seenKennels.has(ib.kennel_number)) continue;
+      seenKennels.add(ib.kennel_number);
+      const { data: existC } = await db.from('cleanings').select('id')
+        .eq('kennel_number', ib.kennel_number)
+        .not('status', 'in', '("completed","skipped")')
+        .eq('scheduled_date', ib.check_out_date)
+        .maybeSingle();
+      if (!existC) {
+        const dogList = (insertedBookings || [])
+          .filter(x => x.kennel_number === ib.kennel_number)
+          .map(x => x.dog_name).join(' + ');
+        await db.from('cleanings').insert({
+          kennel_number: ib.kennel_number,
+          type: 'full',
+          reason: `Post-checkout: ${dogList} (${ib.check_out_date})`,
+          scheduled_date: ib.check_out_date,
+          status: 'pending',
+          booking_id: ib.id,
+        });
+      }
+    }
 
     closeModal();
     const label = dogs.length === 1
@@ -4023,7 +4264,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','shopping','tasks','customers','dogs'];
+const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs'];
 
 function switchTab(tab) {
   const allViews = ['overview','schedule','invoices', ...MORE_TABS];
@@ -4047,6 +4288,7 @@ function switchTab(tab) {
 
   if (tab === 'schedule') renderSchedule();
   if (tab === 'invoices') setInvFilter(_invFilter);
+  if (tab === 'notes') renderNotes();
   if (tab === 'customers') renderCustomers();
   if (tab === 'dogs') {
     // Default to the alphabetical list when arriving via the More menu
