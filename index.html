@@ -1169,8 +1169,17 @@ function renderKennelDetails(bookings) {
 // CLEANINGS
 // ============================================================
 function renderCleanings(cleanings) {
-  // Only show pending/scheduled cleanings in this card (completed are shown in the calendar)
-  const pending = cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped');
+  // Only show pending/scheduled cleanings due within the next 7 days in this card
+  // (overdue ones are kept; everything else lives in the expanded calendar).
+  const cutoff = (() => {
+    const d = new Date(todayStr() + 'T00:00:00');
+    d.setDate(d.getDate() + 7);
+    return kcDateStr(d);
+  })();
+  const pending = cleanings.filter(c =>
+    c.status !== 'completed' && c.status !== 'skipped' &&
+    (!c.scheduled_date || c.scheduled_date <= cutoff)
+  );
   document.getElementById('clean-count').textContent = pending.length;
   if (!pending.length) {
     document.getElementById('cleanings-body').innerHTML = '<div class="empty">No pending cleanings.</div>';
