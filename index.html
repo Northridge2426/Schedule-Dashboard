@@ -861,9 +861,19 @@ async function autoScheduleCleanings() {
   // pre-create feature (no cleaning_id linked yet). Insert into DB + local array
   // so the rest of the scheduler picks them up this same run.
   const linkedBookingIds = new Set(pendingCleanings.map(c => c.booking_id).filter(Boolean));
-  // Also treat any existing pending cleaning on the same kennel+checkout date as coverage,
-  // even if it has no booking_id (created by the older checkout flow).
-  const coveredKennelDates = new Set(pendingCleanings.map(c => `${c.kennel_number}|${c.scheduled_date}`));
+  // Coverage set: kennel + checkout_date of any booking already linked to a cleaning.
+  // Using checkout_date (not scheduled_date) catches shared-kennel cases where two dogs
+  // check out the same day but one cleaning's scheduled_date was bumped by a block-off.
+  // Also include legacy cleanings (no booking_id) keyed by their scheduled_date.
+  const coveredKennelCheckouts = new Set();
+  for (const c of pendingCleanings) {
+    if (c.booking_id) {
+      const lb = bookingById[c.booking_id];
+      if (lb && lb.check_out_date) coveredKennelCheckouts.add(`${c.kennel_number}|${lb.check_out_date}`);
+    } else if (c.scheduled_date) {
+      coveredKennelCheckouts.add(`${c.kennel_number}|${c.scheduled_date}`);
+    }
+  }
   const toCreate = [];
   for (const b of _bookings) {
     if (b.status !== 'pending' && b.status !== 'active') continue;
@@ -871,7 +881,7 @@ async function autoScheduleCleanings() {
     if (!b.check_out_date) continue;
     if (b.check_out_date < td) continue;  // checkout already passed — no cleaning needed
     if (b.check_out_date < b.check_in_date) continue;  // split/shortened booking artifact
-    if (coveredKennelDates.has(`${b.kennel_number}|${b.check_out_date}`)) continue;
+    if (coveredKennelCheckouts.has(`${b.kennel_number}|${b.check_out_date}`)) continue;
     toCreate.push({
       kennel_number: b.kennel_number,
       type: 'full',
