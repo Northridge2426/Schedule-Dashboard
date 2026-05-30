@@ -861,11 +861,15 @@ async function autoScheduleCleanings() {
   // pre-create feature (no cleaning_id linked yet). Insert into DB + local array
   // so the rest of the scheduler picks them up this same run.
   const linkedBookingIds = new Set(pendingCleanings.map(c => c.booking_id).filter(Boolean));
+  // Also treat any existing pending cleaning on the same kennel+checkout date as coverage,
+  // even if it has no booking_id (created by the older checkout flow).
+  const coveredKennelDates = new Set(pendingCleanings.map(c => `${c.kennel_number}|${c.scheduled_date}`));
   const toCreate = [];
   for (const b of _bookings) {
     if (b.status !== 'pending' && b.status !== 'active') continue;
     if (linkedBookingIds.has(b.id)) continue;
     if (!b.check_out_date) continue;
+    if (coveredKennelDates.has(`${b.kennel_number}|${b.check_out_date}`)) continue;
     toCreate.push({
       kennel_number: b.kennel_number,
       type: 'full',
