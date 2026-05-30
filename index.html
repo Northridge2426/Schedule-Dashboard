@@ -869,6 +869,8 @@ async function autoScheduleCleanings() {
     if (b.status !== 'pending' && b.status !== 'active') continue;
     if (linkedBookingIds.has(b.id)) continue;
     if (!b.check_out_date) continue;
+    if (b.check_out_date < td) continue;  // checkout already passed — no cleaning needed
+    if (b.check_out_date < b.check_in_date) continue;  // split/shortened booking artifact
     if (coveredKennelDates.has(`${b.kennel_number}|${b.check_out_date}`)) continue;
     toCreate.push({
       kennel_number: b.kennel_number,
