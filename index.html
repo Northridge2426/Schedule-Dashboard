@@ -916,17 +916,24 @@ async function autoScheduleCleanings() {
   const writebacks = [];
 
   for (const { c, lb } of anchored) {
-    // Start from checkout day, then skip over any kennel block-off dates.
-    let assigned = lb.check_out_date;
+    // Default: clean the day after checkout, skipping any block-off dates.
+    const nextDay = addDays(lb.check_out_date, 1);
+    let assigned = nextDay;
     while (getKennelBlocksOn(c.kennel_number, assigned).length) {
       const d = new Date(assigned + 'T12:00:00'); d.setDate(d.getDate() + 1);
       assigned = d.toISOString().slice(0, 10);
     }
+    // Next check-in strictly after checkout (the dog arriving after this cleaning).
+    const nc = nextCheckinOnOrAfter(c.kennel_number, nextDay);
+    let mustComplete = (assigned <= td);
+    if (nc && nc <= assigned) {
+      // Check-in arrives before or on the cleaning day — snap back to checkout day (urgent/red).
+      mustComplete = true;
+      if (!getKennelBlocksOn(c.kennel_number, lb.check_out_date).length) {
+        assigned = lb.check_out_date;
+      }
+    }
     dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
-    const nc = nextCheckinOnOrAfter(c.kennel_number, assigned);
-    // Red/must-complete when the cleaning day is already today/overdue, or a
-    // check-in lands on the cleaning day or the day after (tight turnaround).
-    const mustComplete = (assigned <= td) || (!!nc && nc <= addDays(assigned, 1));
     const prev = c.scheduled_date;
     c.scheduled_date = assigned;
     c.must_complete  = mustComplete;
