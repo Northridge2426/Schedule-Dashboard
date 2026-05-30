@@ -857,6 +857,29 @@ async function autoScheduleCleanings() {
     return best;
   };
 
+  // Auto-provision missing cleanings for pending/active bookings that predate the
+  // pre-create feature (no cleaning_id linked yet). Insert into DB + local array
+  // so the rest of the scheduler picks them up this same run.
+  const linkedBookingIds = new Set(pendingCleanings.map(c => c.booking_id).filter(Boolean));
+  const toCreate = [];
+  for (const b of _bookings) {
+    if (b.status !== 'pending' && b.status !== 'active') continue;
+    if (linkedBookingIds.has(b.id)) continue;
+    if (!b.check_out_date) continue;
+    toCreate.push({
+      kennel_number: b.kennel_number,
+      type: 'full',
+      reason: `Post-checkout: ${b.dog_name} (${b.check_out_date})`,
+      scheduled_date: b.check_out_date,
+      status: 'pending',
+      booking_id: b.id,
+    });
+  }
+  if (toCreate.length) {
+    const { data: inserted } = await db.from('cleanings').insert(toCreate).select();
+    if (inserted) inserted.forEach(c => { _cleanings.push(c); pendingCleanings.push(c); });
+  }
+
   // Split cleanings into:
   //  • anchored — linked to a still-open booking (pending/active): pin the cleaning
   //    to that booking's checkout day so future cleanings appear on the right date.
@@ -877,7 +900,12 @@ async function autoScheduleCleanings() {
   const writebacks = [];
 
   for (const { c, lb } of anchored) {
-    const assigned = lb.check_out_date;
+    // Start from checkout day, then skip over any kennel block-off dates.
+    let assigned = lb.check_out_date;
+    while (getKennelBlocksOn(c.kennel_number, assigned).length) {
+      const d = new Date(assigned + 'T12:00:00'); d.setDate(d.getDate() + 1);
+      assigned = d.toISOString().slice(0, 10);
+    }
     dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
     const nc = nextCheckinOnOrAfter(c.kennel_number, assigned);
     // Red/must-complete when the cleaning day is already today/overdue, or a
