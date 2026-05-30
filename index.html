@@ -1178,7 +1178,8 @@ function renderCleanings(cleanings) {
   })();
   const pending = cleanings.filter(c =>
     c.status !== 'completed' && c.status !== 'skipped' &&
-    (!c.scheduled_date || c.scheduled_date <= cutoff)
+    (!c.scheduled_date || c.scheduled_date <= cutoff) &&
+    c._next_checkin && c._next_checkin <= cutoff
   );
   document.getElementById('clean-count').textContent = pending.length;
   if (!pending.length) {
