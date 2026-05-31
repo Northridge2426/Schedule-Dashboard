@@ -861,13 +861,16 @@ async function autoScheduleCleanings() {
   // Auto-provision missing cleanings for pending/active bookings that predate the
   // pre-create feature (no cleaning_id linked yet). Insert into DB + local array
   // so the rest of the scheduler picks them up this same run.
-  const linkedBookingIds = new Set(pendingCleanings.map(c => c.booking_id).filter(Boolean));
+  // Build coverage from ALL cleanings (including completed/skipped), not just pending —
+  // otherwise marking a cleaning done un-covers its booking and this block immediately
+  // re-creates a fresh pending cleaning for it (the "won't stay clean" bug).
+  const linkedBookingIds = new Set(_cleanings.map(c => c.booking_id).filter(Boolean));
   // Coverage set: kennel + checkout_date of any booking already linked to a cleaning.
   // Using checkout_date (not scheduled_date) catches shared-kennel cases where two dogs
   // check out the same day but one cleaning's scheduled_date was bumped by a block-off.
   // Also include legacy cleanings (no booking_id) keyed by their scheduled_date.
   const coveredKennelCheckouts = new Set();
-  for (const c of pendingCleanings) {
+  for (const c of _cleanings) {
     if (c.booking_id) {
       const lb = bookingById[c.booking_id];
       if (lb && lb.check_out_date) coveredKennelCheckouts.add(`${c.kennel_number}|${lb.check_out_date}`);
