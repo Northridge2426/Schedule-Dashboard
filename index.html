@@ -1049,9 +1049,13 @@ function renderKennels(bookings, cleanings, kennels) {
     if (!completedByKennel[b.kennel_number]) completedByKennel[b.kennel_number] = [];
     completedByKennel[b.kennel_number].push(b);
   });
-  // Only mark dirty if there's a pending/scheduled cleaning and no active dog
+  // Only mark dirty if there's a pending cleaning that is DUE (today or overdue)
+  // and no active dog. Future-dated cleanings (e.g. for an upcoming booking's
+  // checkout) must not flag the kennel as needing cleaning today.
   cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped').forEach(c => {
-    if (!activeByKennel[c.kennel_number]) dirtyKennels.add(c.kennel_number);
+    if (activeByKennel[c.kennel_number]) return;
+    if (c.scheduled_date && c.scheduled_date > td) return; // due in the future — not dirty yet
+    dirtyKennels.add(c.kennel_number);
   });
 
   // Capacity = distinct kennels with active stays only
@@ -1127,7 +1131,11 @@ function renderKennels(bookings, cleanings, kennels) {
     cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
 
     if (isDirty && !isActive) {
-      const dirtyClean = cleanings.find(c => c.kennel_number === k);
+      // Target the DUE pending cleaning (today/overdue), not a completed or future one
+      const dueCleanings = cleanings.filter(c => c.kennel_number === k
+        && c.status !== 'completed' && c.status !== 'skipped'
+        && (!c.scheduled_date || c.scheduled_date <= td));
+      const dirtyClean = dueCleanings.sort((a,b) => (a.scheduled_date||'').localeCompare(b.scheduled_date||''))[0];
       if (dirtyClean) {
         cell.style.cursor = 'pointer';
         cell.onclick = () => markCleaningDone(dirtyClean.id, k);
