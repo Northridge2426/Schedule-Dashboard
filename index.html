@@ -1052,12 +1052,18 @@ function renderKennels(bookings, cleanings, kennels) {
     if (!completedByKennel[b.kennel_number]) completedByKennel[b.kennel_number] = [];
     completedByKennel[b.kennel_number].push(b);
   });
-  // Only mark dirty if there's a pending cleaning that is DUE (today or overdue)
-  // and no active dog. Future-dated cleanings (e.g. for an upcoming booking's
-  // checkout) must not flag the kennel as needing cleaning today.
+  // Mark dirty if there's a pending cleaning and no active dog — UNLESS the cleaning
+  // is for a booking that hasn't checked out yet (a future stay). A kennel whose dog
+  // has already left is dirty now even if the cleaning is scheduled for tomorrow;
+  // a kennel awaiting a future arrival (cleaning tied to a not-yet-checked-out
+  // booking) is NOT dirty yet.
+  const bookingByIdK = {};
+  bookings.forEach(b => { bookingByIdK[b.id] = b; });
   cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped').forEach(c => {
     if (activeByKennel[c.kennel_number]) return;
-    if (c.scheduled_date && c.scheduled_date > td) return; // due in the future — not dirty yet
+    const lb = c.booking_id ? bookingByIdK[c.booking_id] : null;
+    if (lb && lb.check_out_date && lb.check_out_date > td) return; // future checkout — not dirty yet
+    if (!lb && c.scheduled_date && c.scheduled_date > td) return;  // orphan cleaning due in future
     dirtyKennels.add(c.kennel_number);
   });
 
@@ -1134,10 +1140,17 @@ function renderKennels(bookings, cleanings, kennels) {
     cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
 
     if (isDirty && !isActive) {
-      // Target the DUE pending cleaning (today/overdue), not a completed or future one
-      const dueCleanings = cleanings.filter(c => c.kennel_number === k
-        && c.status !== 'completed' && c.status !== 'skipped'
-        && (!c.scheduled_date || c.scheduled_date <= td));
+      // Target the pending cleaning driving the dirty state — the one whose booking
+      // has already checked out (or has no booking link), earliest first. Never a
+      // completed cleaning or one tied to a future (not-yet-checked-out) booking.
+      const dueCleanings = cleanings.filter(c => {
+        if (c.kennel_number !== k) return false;
+        if (c.status === 'completed' || c.status === 'skipped') return false;
+        const lb = c.booking_id ? bookingByIdK[c.booking_id] : null;
+        if (lb && lb.check_out_date && lb.check_out_date > td) return false;
+        if (!lb && c.scheduled_date && c.scheduled_date > td) return false;
+        return true;
+      });
       const dirtyClean = dueCleanings.sort((a,b) => (a.scheduled_date||'').localeCompare(b.scheduled_date||''))[0];
       if (dirtyClean) {
         cell.style.cursor = 'pointer';
