@@ -1049,8 +1049,8 @@ function renderKennels(bookings, cleanings, kennels) {
     if (!completedByKennel[b.kennel_number]) completedByKennel[b.kennel_number] = [];
     completedByKennel[b.kennel_number].push(b);
   });
-  // Only mark dirty if there's no active dog
-  cleanings.forEach(c => {
+  // Only mark dirty if there's a pending/scheduled cleaning and no active dog
+  cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped').forEach(c => {
     if (!activeByKennel[c.kennel_number]) dirtyKennels.add(c.kennel_number);
   });
 
@@ -4856,4 +4856,65 @@ async function renderSchedule() {
   document.getElementById('sched-routine').innerHTML = rHTML;
 
   // Reminders: pinned (persistent=true, no date) always show; dated reminders show only on their exact date
-  const schedRemi
+  const schedReminders = _reminders
+    .filter(r => (r.persistent && !r.target_date) || (r.target_date && r.target_date <= td))
+    .sort((a, b) => {
+      if (a.persistent && !b.persistent) return -1;
+      if (!a.persistent && b.persistent) return 1;
+      return 0;
+    });
+  let pinHTML = `<div class="sched-card">
+    <div class="sched-card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem">
+      <span>📌 Reminders</span>
+      <button class="btn-add" onclick="openAddReminder('${td}')">+ Add</button>
+    </div>`;
+  if (!schedReminders.length) {
+    pinHTML += '<div class="empty">No reminders for this date.</div>';
+  } else {
+    schedReminders.forEach(r => {
+      pinHTML += `<div class="sched-pin" style="justify-content:space-between;align-items:center">
+        <span>• ${r.text}</span>
+        <button class="btn-icon" style="font-size:0.8rem;padding:0.1rem 0.3rem;flex-shrink:0" title="Dismiss" onclick="dismissReminder('${r.id}')">×</button>
+      </div>`;
+    });
+  }
+  document.getElementById('sched-reminders').innerHTML = pinHTML + '</div>';
+}
+
+// ============================================================
+// ACTION: ROUTINE COMPLETION TOGGLE
+// ============================================================
+async function toggleCompletion(taskKey, el, dateStr) {
+  const td = dateStr || _schedDate;
+  if (el.checked) {
+    const { error } = await db.from('routine_completions').insert({
+      task_key: taskKey, completion_date: td, completed_at: new Date().toISOString(),
+    });
+    if (error) { el.checked = false; showToast('Error saving', 'error'); return; }
+    _completions.add(taskKey);
+  } else {
+    const { error } = await db.from('routine_completions')
+      .delete().eq('task_key', taskKey).eq('completion_date', td);
+    if (error) { el.checked = true; showToast('Error saving', 'error'); return; }
+    _completions.delete(taskKey);
+  }
+  const row = el.closest('.sched-item');
+  if (row) row.classList.toggle('done', el.checked);
+}
+
+function openAddShopping() {
+  const listLabel = _shopTab === 'yellowknife' ? 'Yellowknife' : _shopTab === 'online' ? 'Online' : 'Local';
+  const body = `<div class="form-field"><label>Item *</label><input type="text" id="f-shop-item" placeholder="e.g. Chicken breast"></div>`;
+  openModal('Add to ' + listLabel + ' List', body, async () => {
+    const item = document.getElementById('f-shop-item').value.trim();
+    if (!item) throw new Error('Item name is required');
+    const { error } = await db.from('shopping_items').insert({ list_name: _shopTab, item, status: 'active' });
+    if (error) throw error;
+    closeModal();
+    showToast('Added: ' + item);
+    await loadAll();
+  });
+}
+</script>
+</body>
+</html>
