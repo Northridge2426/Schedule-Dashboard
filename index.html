@@ -1063,7 +1063,8 @@ function renderKennels(bookings, cleanings, kennels) {
     if (activeByKennel[c.kennel_number]) return;
     const lb = c.booking_id ? bookingByIdK[c.booking_id] : null;
     if (lb && lb.check_out_date && lb.check_out_date > td) return; // future checkout — not dirty yet
-    if (!lb && c.scheduled_date && c.scheduled_date > td) return;  // orphan cleaning due in future
+    // Orphan cleanings (no booking link) are legacy post-checkout cleanings for a
+    // checkout that already happened — always dirty regardless of scheduled_date.
     dirtyKennels.add(c.kennel_number);
   });
 
@@ -1148,7 +1149,6 @@ function renderKennels(bookings, cleanings, kennels) {
         if (c.status === 'completed' || c.status === 'skipped') return false;
         const lb = c.booking_id ? bookingByIdK[c.booking_id] : null;
         if (lb && lb.check_out_date && lb.check_out_date > td) return false;
-        if (!lb && c.scheduled_date && c.scheduled_date > td) return false;
         return true;
       });
       const dirtyClean = dueCleanings.sort((a,b) => (a.scheduled_date||'').localeCompare(b.scheduled_date||''))[0];
