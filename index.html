@@ -246,7 +246,7 @@
     .kc-cell.kc-clean-day.kc-clean-warning::before { content: '⚠ 🧹'; }
     .kc-cell.kc-clean-marker.kc-clean-warning::after { content: '⚠'; color: #b91c1c; }
     /* Completed cleaning on an empty day — green history marker */
-    .kc-cell.kc-clean-done { background: #bbf7d0; color: #15803d; font-size: 0.65rem; cursor: default; }
+    .kc-cell.kc-clean-done { background: #bbf7d0; color: #15803d; font-size: 0.65rem; cursor: pointer; }
     .kc-cell.kc-clean-done::before { content: '✓ 🧹'; }
     /* Completed cleaning overlapping a booking block — checkmark broom overlay */
     .kc-cell.kc-clean-done-marker::after { content: '✓🧹'; position: absolute; top: 1px; right: 2px; font-size: 0.55rem; line-height: 1; }
@@ -896,7 +896,14 @@ async function autoScheduleCleanings() {
     });
   }
   if (toCreate.length) {
-    const { data: inserted } = await db.from('cleanings').upsert(toCreate, { onConflict: 'kennel_number,booking_id', ignoreDuplicates: true }).select();
+    // Plain insert (not upsert): the partial unique index on (kennel_number,
+    // booking_id) WHERE booking_id IS NOT NULL can't be used reliably as an
+    // upsert conflict target through PostgREST, which silently dropped these
+    // inserts and left post-checkout cleanings (e.g. Chloe's) un-created. The
+    // toCreate list is already de-duplicated above against linked + covered
+    // bookings, so a straight insert is safe.
+    const { data: inserted, error: insErr } = await db.from('cleanings').insert(toCreate).select();
+    if (insErr) console.warn('auto-provision insert failed:', insErr.message);
     if (inserted) inserted.forEach(c => { _cleanings.push(c); pendingCleanings.push(c); });
   }
 
@@ -918,6 +925,16 @@ async function autoScheduleCleanings() {
 
   const dayCounts = {};
   const writebacks = [];
+  const manualClears = [];   // cleanings whose manual move the auto-advance has caught up to
+  // Apply a user's manual move: keep the cleaning on its chosen later date until
+  // the normal auto-advance reaches that date, then clear it and resume normal
+  // logic. Returns the (possibly overridden) assigned date.
+  const applyManual = (c, assigned) => {
+    if (!c.manual_date) return assigned;
+    if (c.manual_date > assigned) return c.manual_date;   // still in the future — honor it
+    manualClears.push(c.id); c.manual_date = null;          // caught up — resume normal
+    return assigned;
+  };
 
   for (const { c, lb } of anchored) {
     // Default: clean the day after checkout, skipping any block-off dates.
@@ -937,6 +954,8 @@ async function autoScheduleCleanings() {
         assigned = lb.check_out_date;
       }
     }
+    assigned = applyManual(c, assigned);
+    if (c.manual_date) mustComplete = (assigned <= td);  // manually delayed — only red if it's now due
     dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
     const prev = c.scheduled_date;
     c.scheduled_date = assigned;
@@ -987,8 +1006,10 @@ async function autoScheduleCleanings() {
       assigned = cursor.toISOString().slice(0,10);
     }
 
+    assigned = applyManual(c, assigned);
     dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
     if (assigned <= td) mustComplete = true;
+    else if (c.manual_date) mustComplete = false;  // manually pushed to a future day — not urgent
 
     const prev = c.scheduled_date;
     c.scheduled_date = assigned;
@@ -1008,6 +1029,13 @@ async function autoScheduleCleanings() {
         try { await db.from('cleanings').update({ scheduled_date: w.scheduled_date }).eq('id', w.id); }
         catch(e) { /* silent — next loadAll will retry */ }
       }
+    })();
+  }
+  // Clear manual_date for cleanings the auto-advance has now caught up to.
+  if (manualClears.length) {
+    (async () => {
+      try { await db.from('cleanings').update({ manual_date: null }).in('id', manualClears); }
+      catch(e) { /* silent — next loadAll will retry */ }
     })();
   }
 }
@@ -1252,10 +1280,11 @@ function renderCleanings(cleanings) {
     d.setDate(d.getDate() + 7);
     return kcDateStr(d);
   })();
+  // Show every pending cleaning due within the next 7 days (plus anything overdue),
+  // regardless of whether a dog is arriving soon — this card is the "to-do" list.
   const pending = cleanings.filter(c =>
     c.status !== 'completed' && c.status !== 'skipped' &&
-    (!c.scheduled_date || c.scheduled_date <= cutoff) &&
-    c._next_checkin && c._next_checkin <= cutoff
+    c.scheduled_date && c.scheduled_date <= cutoff
   );
   document.getElementById('clean-count').textContent = pending.length;
   if (!pending.length) {
@@ -1263,31 +1292,37 @@ function renderCleanings(cleanings) {
     return;
   }
   const td  = todayStr();
-  const tmr = tomorrowStr();
+  // Count pending cleanings per day so a backlog (more than one cleaning the
+  // scheduler couldn't spread to its own day) can be flagged yellow.
+  const dayLoad = {};
+  pending.forEach(c => { if (c.scheduled_date) dayLoad[c.scheduled_date] = (dayLoad[c.scheduled_date] || 0) + 1; });
   let html = '<table class="tbl"><thead><tr><th>K</th><th>Type</th><th>Date</th><th>Reason</th><th></th></tr></thead><tbody>';
-  // Priority order: must_complete first, then by scheduled_date
+  // Order: due-today / overdue first, then by scheduled date.
   const ordered = [...pending].sort((a, b) => {
-    if (!!a.must_complete !== !!b.must_complete) return a.must_complete ? -1 : 1;
     const ad = a.scheduled_date || '9999-12-31';
     const bd = b.scheduled_date || '9999-12-31';
     return ad.localeCompare(bd);
   });
   ordered.forEach(c => {
-    const overdue    = c.scheduled_date && c.scheduled_date < td;
-    const mustNow    = !!c.must_complete;
-    // Red if: overdue, must_complete, OR next check-in is today or tomorrow (within 24h)
-    const within24h  = c._next_checkin && (c._next_checkin <= tmr);
-    const isUrgent   = overdue || mustNow || within24h;
-    const rowStyle   = isUrgent ? 'background:#fef2f2' : '';
-    const dateColor  = isUrgent ? '#b91c1c' : 'inherit';
-    const dateWeight = isUrgent ? '600' : '400';
-    const dateIcon   = isUrgent ? ' ⚠' : '';
+    const overdue   = c.scheduled_date && c.scheduled_date < td;
+    const dueToday  = c.scheduled_date && c.scheduled_date === td;
+    // Red = must be done today (due today or already late). Tight-turnaround
+    // warnings (next check-in soon but not yet due) live in the Expanded view.
+    const isRed     = overdue || dueToday;
+    // Yellow = backlog: more than one cleaning stacked on the same future day.
+    const isYellow  = !isRed && c.scheduled_date && dayLoad[c.scheduled_date] > 1;
+    const rowStyle  = isRed ? 'background:#fef2f2' : isYellow ? 'background:#fef9c3' : '';
+    const dateColor = isRed ? '#b91c1c' : isYellow ? '#92400e' : 'inherit';
+    const dateWeight = (isRed || isYellow) ? '600' : '400';
+    const dateIcon   = isRed ? ' ⚠' : '';
     const dateCell   = c.scheduled_date
       ? `<span style="color:${dateColor};font-weight:${dateWeight}">${fmtDate(c.scheduled_date)}${dateIcon}</span>`
       : '—';
     const typeLabel  = c.type === 'quick_refresh' ? '<span class="badge badge-blue">Quick</span>' : '<span class="badge badge-gray">Full</span>';
-    const warnNote   = isUrgent && c._next_checkin
-      ? `<br><span style="color:#b91c1c;font-size:0.72rem;font-weight:600">⚠ Next check-in ${fmtDate(c._next_checkin)}</span>`
+    // Next check-in shown as plain info (not an alert) unless the cleaning is due today.
+    const noteColor  = isRed ? '#b91c1c' : '#94a3b8';
+    const warnNote   = c._next_checkin
+      ? `<br><span style="color:${noteColor};font-size:0.72rem;font-weight:${isRed ? '600' : '400'}">Next check-in ${fmtDate(c._next_checkin)}</span>`
       : '';
     html += `<tr style="${rowStyle}">
       <td><strong>K${c.kennel_number}</strong></td>
@@ -3176,7 +3211,7 @@ function renderKennelCalendar() {
           // Completed cleaning — show as green history marker
           cls += ' kc-clean-done';
           label = '';
-          attrs = `title="K${k} — Cleaning completed ${fmtDate(c.completed_date || c.scheduled_date)}: ${c.reason || ''}"`;
+          attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning completed ${fmtDate(c.completed_date || c.scheduled_date)}: ${c.reason || ''} (click to edit)"`;
         } else {
           // Pending/scheduled cleaning — warning only when auto-scheduler flagged it
           cls += ' kc-clean-day';
@@ -3226,11 +3261,8 @@ function renderKennelCalendar() {
         const b = _bookings.find(x => x.id === bId);
         if (b) { closeKennelCalendar(); openBookingChooser(b.id); }
       } else if (cleaningId) {
-        const c = _cleanings.find(x => x.id === cleaningId);
-        if (c && c.status !== 'completed' && confirm(`Mark K${c.kennel_number} cleaning done?`)) {
-          closeKennelCalendar();
-          markCleaningDone(c.id, c.kennel_number);
-        }
+        closeKennelCalendar();
+        openCleaningEditor(cleaningId);
       } else if (addK) {
         const ds = cell.getAttribute('data-add-date');
         closeKennelCalendar();
@@ -4165,6 +4197,81 @@ async function markCleaningDone(id, kennelNum) {
   }).eq('id', id);
   if (error) { showToast('Error: ' + error.message, 'error'); return; }
   showToast(`K${kennelNum} cleaning marked complete`);
+  await loadAll();
+}
+
+// ============================================================
+// ACTION: EDIT / MOVE A CLEANING (from the Expanded calendar)
+// ============================================================
+// Opens a small editor letting you move a cleaning's date, mark it done on a
+// specific day (e.g. you cleaned yesterday but forgot to log it), or reopen a
+// completed one. Moving a PENDING cleaning to a future date sets manual_date so
+// the move sticks until the daily auto-advance catches up (see autoScheduleCleanings).
+function openCleaningEditor(cleaningId) {
+  const c = _cleanings.find(x => x.id === cleaningId);
+  if (!c) return;
+  const isDone  = c.status === 'completed';
+  const curDate = isDone
+    ? (c.completed_date || c.scheduled_date || todayStr())
+    : (c.scheduled_date || todayStr());
+  const body = `
+    <div style="font-size:0.85rem;color:#475569;margin-bottom:0.75rem">
+      <strong>K${c.kennel_number}</strong> — ${c.reason || 'Cleaning'}
+      <div style="color:#94a3b8;font-size:0.78rem;margin-top:0.2rem">
+        Status: ${isDone ? 'Completed' : 'Pending'}${c.manual_date ? ' · manually moved' : ''}
+      </div>
+    </div>
+    <div class="form-field">
+      <label>${isDone ? 'Date cleaned' : 'Scheduled date'}</label>
+      <input type="date" id="ce-date" value="${curDate}">
+    </div>
+    ${isDone ? '' : `<p style="font-size:0.74rem;color:#94a3b8;margin:0.4rem 0 0">
+      Moving this to a later date keeps it there until the daily auto-advance
+      catches up, then normal scheduling resumes.</p>`}
+    <div style="display:flex;gap:0.5rem;margin-top:0.9rem;flex-wrap:wrap">
+      ${isDone
+        ? `<button class="btn btn-secondary btn-sm" onclick="cleaningReopen('${c.id}')">↩ Mark not done</button>`
+        : `<button class="btn btn-success btn-sm" onclick="cleaningMarkDoneOn('${c.id}')">✓ Mark done (on date above)</button>`}
+    </div>`;
+  openModal(isDone ? 'Edit completed cleaning' : 'Edit / move cleaning', body, async () => {
+    const newDate = document.getElementById('ce-date').value;
+    if (!newDate) { showToast('Pick a date', 'error'); return; }
+    let patch;
+    if (isDone) {
+      patch = { completed_date: newDate, scheduled_date: newDate };
+    } else {
+      // Future move → sticky (manual_date). Today/past → plain reschedule, let normal logic run.
+      patch = (newDate > todayStr())
+        ? { scheduled_date: newDate, manual_date: newDate }
+        : { scheduled_date: newDate, manual_date: null };
+    }
+    const { error } = await db.from('cleanings').update(patch).eq('id', c.id);
+    if (error) { showToast('Error: ' + error.message, 'error'); return; }
+    closeModal();
+    showToast('Cleaning updated');
+    await loadAll();
+  }, 'Save date');
+}
+
+async function cleaningMarkDoneOn(id) {
+  const dateEl = document.getElementById('ce-date');
+  const doneDate = (dateEl && dateEl.value) ? dateEl.value : todayStr();
+  const c = _cleanings.find(x => x.id === id);
+  const { error } = await db.from('cleanings').update({
+    status: 'completed', completed_date: doneDate, scheduled_date: doneDate, manual_date: null,
+  }).eq('id', id);
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  closeModal();
+  showToast(`K${c ? c.kennel_number : ''} cleaning marked done ${fmtDate(doneDate)}`);
+  await loadAll();
+}
+
+async function cleaningReopen(id) {
+  if (!confirm('Mark this cleaning as NOT done (back to pending)?')) return;
+  const { error } = await db.from('cleanings').update({ status: 'pending', completed_date: null }).eq('id', id);
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  closeModal();
+  showToast('Cleaning reopened');
   await loadAll();
 }
 
