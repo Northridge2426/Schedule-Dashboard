@@ -1923,7 +1923,7 @@ function openBookingChooser(bookingId) {
   let primaryHTML = '';
   let editHTML = '';
   if (b.status === 'active') {
-    primaryHTML = `<button class="btn btn-danger" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">🔴 Check Out / Manage Booking</button>`;
+    primaryHTML = `<button class="btn btn-primary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">✏ Edit / Manage Booking <span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;margin-top:0.15rem">change dates (incl. extend a past checkout), kennel, or check out</span></button>`;
   } else if (b.status === 'pending') {
     primaryHTML = `<button class="btn btn-success" onclick="closeModal();openLogCheckinById('${b.id}')" style="padding:1rem;font-size:0.95rem">🟢 Check In</button>`;
     editHTML    = `<button class="btn btn-secondary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:0.75rem;text-align:left">✏ Edit booking (dates / kennel)</button>`;
@@ -2098,8 +2098,8 @@ function openLogCheckout(booking) {
   document.getElementById('modal-footer').innerHTML = `
     ${cancelBtn}
     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
-    <button class="btn btn-secondary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save</button>
-    <button class="btn btn-primary" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">${checkoutLabel}</button>`;
+    <button class="btn btn-primary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save changes</button>
+    <button class="btn btn-secondary" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">${checkoutLabel}</button>`;
 }
 
 async function manageBookingSave(bookingId) {
