@@ -926,6 +926,7 @@ async function autoScheduleCleanings() {
   const dayCounts = {};
   const writebacks = [];
   const manualClears = [];   // cleanings whose manual move the auto-advance has caught up to
+  const kennelFixes = [];    // cleanings whose kennel must follow a moved booking
   // Apply a user's manual move: keep the cleaning on its chosen later date until
   // the normal auto-advance reaches that date, then clear it and resume normal
   // logic. Returns the (possibly overridden) assigned date.
@@ -937,6 +938,12 @@ async function autoScheduleCleanings() {
   };
 
   for (const { c, lb } of anchored) {
+    // If the booking was moved to a different kennel, its cleaning follows it
+    // (otherwise the cleaning is stranded on the old kennel and the new one shows none).
+    if (lb.kennel_number && c.kennel_number !== lb.kennel_number) {
+      c.kennel_number = lb.kennel_number;
+      kennelFixes.push({ id: c.id, kennel_number: lb.kennel_number });
+    }
     // Default: clean the day after checkout, skipping any block-off dates.
     const nextDay = addDays(lb.check_out_date, 1);
     let assigned = nextDay;
@@ -1036,6 +1043,15 @@ async function autoScheduleCleanings() {
     (async () => {
       try { await db.from('cleanings').update({ manual_date: null }).in('id', manualClears); }
       catch(e) { /* silent — next loadAll will retry */ }
+    })();
+  }
+  // Persist kennel moves (cleaning followed its booking to a new kennel).
+  if (kennelFixes.length) {
+    (async () => {
+      for (const w of kennelFixes) {
+        try { await db.from('cleanings').update({ kennel_number: w.kennel_number }).eq('id', w.id); }
+        catch(e) { /* silent — next loadAll will retry */ }
+      }
     })();
   }
 }
@@ -3197,8 +3213,8 @@ function renderKennelCalendar() {
             label += `<div class="kc-cancelled-strip">${cNames}</div>`;
           }
         }
-      } else if (bCanc) {
-        // Cancelled-only cell — brown with strikethrough
+      } else if (bCanc && !c) {
+        // Cancelled-only cell (and no cleaning to show) — brown with strikethrough
         cls += ' kc-cancelled-brown';
         const showName = bCancArr.some(bk => startOfStayCancelled[`${k}|${bk.id}`] === ds);
         const cNames = bCancArr.map(bk => bk.dog_name).join('+');
