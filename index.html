@@ -2307,11 +2307,14 @@ async function manageBookingCheckout(bookingId) {
     const kennelsInGroup = [...new Set(groupBookings.map(x => x.kennel_number))];
     if (!kennelsInGroup.length && b) kennelsInGroup.push(b.kennel_number);
     for (const kn of kennelsInGroup) {
+      // Use limit(1) (not maybeSingle, which ERRORS when 2+ rows already exist and
+      // then falls through to create yet another duplicate). Skip if any pending
+      // cleaning already exists for this kennel.
       const { data: existing } = await db.from('cleanings')
         .select('id').eq('kennel_number', kn)
         .not('status','in','("completed","skipped")')
-        .maybeSingle();
-      if (!existing) {
+        .limit(1);
+      if (!existing || !existing.length) {
         const dogList = groupBookings.filter(x => x.kennel_number === kn).map(x => x.dog_name).join(' + ') || b?.dog_name || '';
         await db.from('cleanings').insert({
           kennel_number: kn,
@@ -2985,8 +2988,8 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
         .eq('kennel_number', ib.kennel_number)
         .not('status', 'in', '("completed","skipped")')
         .eq('scheduled_date', ib.check_out_date)
-        .maybeSingle();
-      if (!existC) {
+        .limit(1);
+      if (!existC || !existC.length) {
         const dogList = (insertedBookings || [])
           .filter(x => x.kennel_number === ib.kennel_number)
           .map(x => x.dog_name).join(' + ');
