@@ -3213,8 +3213,9 @@ function renderKennelCalendar() {
             label += `<div class="kc-cancelled-strip">${cNames}</div>`;
           }
         }
-      } else if (bCanc && !c) {
-        // Cancelled-only cell (and no cleaning to show) — brown with strikethrough
+      } else if (bCanc) {
+        // Cancelled-only cell — brown with strikethrough (a cleaning, if any, is
+        // overlaid as a broom marker below so it stays visible).
         cls += ' kc-cancelled-brown';
         const showName = bCancArr.some(bk => startOfStayCancelled[`${k}|${bk.id}`] === ds);
         const cNames = bCancArr.map(bk => bk.dog_name).join('+');
@@ -3249,13 +3250,16 @@ function renderKennelCalendar() {
         label = '+';
         attrs = `data-add-kennel="${k}" data-add-date="${ds}"`;
       }
-      if (c && b) {
+      if (c && (b || bCanc)) {
         if (c.status === 'completed') {
           cls += ' kc-clean-done-marker';
         } else {
           cls += ' kc-clean-marker';
           if (c.must_complete) cls += ' kc-clean-warning';
         }
+        // On a cancelled-only cell no booking owns the click — let the broom
+        // marker open the cleaning editor (and show a pointer cursor).
+        if (!b && bCanc) attrs += ` data-cleaning="${c.id}" style="cursor:pointer"`;
       }
       html += `<td class="${cls}" ${attrs}>${label}</td>`;
     }
