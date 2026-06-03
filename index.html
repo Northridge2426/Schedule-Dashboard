@@ -907,29 +907,13 @@ async function autoScheduleCleanings() {
     if (inserted) inserted.forEach(c => { _cleanings.push(c); pendingCleanings.push(c); });
   }
 
-  // Split cleanings into:
-  //  • anchored — linked to a still-open booking (pending/active): pin the cleaning
-  //    to that booking's checkout day so future cleanings appear on the right date.
-  //  • legacy   — no live booking link (kennel already free / booking completed):
-  //    pack into the earliest free day, max 1/day, as before.
-  const anchored = [], legacy = [];
-  for (const c of pendingCleanings) {
-    const lb = c.booking_id ? bookingById[c.booking_id] : null;
-    if (lb && (lb.status === 'pending' || lb.status === 'active') &&
-        lb.check_out_date && lb.check_out_date >= lb.check_in_date) {
-      anchored.push({ c, lb });
-    } else {
-      legacy.push(c);
-    }
-  }
-
+  const tmr = tomorrowStr();
   const dayCounts = {};
   const writebacks = [];
   const manualClears = [];   // cleanings whose manual move the auto-advance has caught up to
   const kennelFixes = [];    // cleanings whose kennel must follow a moved booking
   // Apply a user's manual move: keep the cleaning on its chosen later date until
-  // the normal auto-advance reaches that date, then clear it and resume normal
-  // logic. Returns the (possibly overridden) assigned date.
+  // the normal auto-advance reaches that date, then clear it and resume normal logic.
   const applyManual = (c, assigned) => {
     if (!c.manual_date) return assigned;
     if (c.manual_date > assigned) return c.manual_date;   // still in the future — honor it
@@ -937,95 +921,74 @@ async function autoScheduleCleanings() {
     return assigned;
   };
 
-  for (const { c, lb } of anchored) {
-    // If the booking was moved to a different kennel, its cleaning follows it
-    // (otherwise the cleaning is stranded on the old kennel and the new one shows none).
-    if (lb.kennel_number && c.kennel_number !== lb.kennel_number) {
+  // Build one unified work list. For each cleaning compute:
+  //   • earliest    — first day it could physically be done (day after checkout,
+  //                   skipping blocks; or the kennel's earliest free day for legacy)
+  //   • deadline    — the next check-in needing this kennel clean (drives priority + urgency)
+  //   • checkoutDay — anchored only, to snap onto for same-/next-day turnarounds
+  const work = [];
+  for (const c of pendingCleanings) {
+    const lb = c.booking_id ? bookingById[c.booking_id] : null;
+    const anchored = !!(lb && (lb.status === 'pending' || lb.status === 'active') &&
+                        lb.check_out_date && lb.check_out_date >= lb.check_in_date);
+    // Anchored cleaning follows its booking if the booking was moved between kennels.
+    if (anchored && lb.kennel_number && c.kennel_number !== lb.kennel_number) {
       c.kennel_number = lb.kennel_number;
       kennelFixes.push({ id: c.id, kennel_number: lb.kennel_number });
     }
-    // Default: clean the day after checkout, skipping any block-off dates.
-    const nextDay = addDays(lb.check_out_date, 1);
-    let assigned = nextDay;
-    while (getKennelBlocksOn(c.kennel_number, assigned).length) {
-      const d = new Date(assigned + 'T12:00:00'); d.setDate(d.getDate() + 1);
-      assigned = d.toISOString().slice(0, 10);
+    let earliest, deadline, checkoutDay = null;
+    if (anchored) {
+      checkoutDay = lb.check_out_date;
+      let d = addDays(lb.check_out_date, 1);
+      while (getKennelBlocksOn(c.kennel_number, d).length) d = addDays(d, 1);
+      earliest = d;
+      deadline = nextCheckinOnOrAfter(c.kennel_number, addDays(lb.check_out_date, 1));
+    } else {
+      earliest = earliestFree[c.kennel_number] || td;
+      if (earliest < td) earliest = td;
+      deadline = nextCheckinOnOrAfter(c.kennel_number, td);
     }
-    // Next check-in strictly after checkout (the dog arriving after this cleaning).
-    const nc = nextCheckinOnOrAfter(c.kennel_number, nextDay);
-    let mustComplete = (assigned <= td);
-    if (nc && nc <= assigned) {
-      // Check-in arrives before or on the cleaning day — snap back to checkout day (urgent/red).
-      mustComplete = true;
-      if (!getKennelBlocksOn(c.kennel_number, lb.check_out_date).length) {
-        assigned = lb.check_out_date;
-      }
-    }
-    assigned = applyManual(c, assigned);
-    if (c.manual_date) mustComplete = (assigned <= td);  // manually delayed — only red if it's now due
-    dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
-    const prev = c.scheduled_date;
-    c.scheduled_date = assigned;
-    c.must_complete  = mustComplete;
-    c._next_checkin  = nc || null;
-    if (prev !== assigned) writebacks.push({ id: c.id, scheduled_date: assigned });
+    work.push({ c, anchored, earliest, deadline, checkoutDay });
   }
 
-  // Priority order for legacy: kennel with the soonest next check-in first.
-  const sorted = [...legacy].sort((a, b) => {
-    const aNext = nextCheckinOnOrAfter(a.kennel_number, td) || '9999-12-31';
-    const bNext = nextCheckinOnOrAfter(b.kennel_number, td) || '9999-12-31';
-    if (aNext !== bNext) return aNext.localeCompare(bNext);
-    const aKey = a.scheduled_date || (a.created_at || '').slice(0,10) || '9999';
-    const bKey = b.scheduled_date || (b.created_at || '').slice(0,10) || '9999';
-    return aKey.localeCompare(bKey);
+  // Priority: the kennel whose next check-in is soonest gets the soonest slot.
+  // Kennels with no upcoming check-in come last, ordered by how soon they could be
+  // done. Tie-break on existing scheduled date for stability.
+  work.sort((a, b) => {
+    const ad = a.deadline || '9999-12-31', bd = b.deadline || '9999-12-31';
+    if (ad !== bd) return ad.localeCompare(bd);
+    if (a.earliest !== b.earliest) return a.earliest.localeCompare(b.earliest);
+    return (a.c.scheduled_date || '9999-12-31').localeCompare(b.c.scheduled_date || '9999-12-31');
   });
 
-  for (const c of sorted) {
-    const earliest = earliestFree[c.kennel_number];
-    const limit    = nextCheckinOnOrAfter(c.kennel_number, td); // cleaning must finish by this date
-
-    let assigned;
-    let mustComplete = false;
-
-    if (limit && limit <= earliest) {
-      assigned = earliest;
-      mustComplete = true;
-    } else if (limit) {
-      const limitDt = new Date(limit + 'T12:00:00');
-      let cursor = new Date(earliest + 'T12:00:00');
-      let firstAvailable = null;
-      let firstAny = null;
-      while (cursor < limitDt) {
-        const ds = cursor.toISOString().slice(0,10);
-        if (firstAny === null) firstAny = ds;
-        if (!dayCounts[ds]) { firstAvailable = ds; break; }
-        cursor.setDate(cursor.getDate() + 1);
-      }
-      assigned = firstAvailable || firstAny || earliest;
-      const dayBefore = new Date(limitDt); dayBefore.setDate(dayBefore.getDate() - 1);
-      if (assigned >= dayBefore.toISOString().slice(0,10)) mustComplete = true;
-    } else {
-      let cursor = new Date(earliest + 'T12:00:00');
-      while (dayCounts[cursor.toISOString().slice(0,10)]) {
-        cursor.setDate(cursor.getDate() + 1);
-      }
-      assigned = cursor.toISOString().slice(0,10);
+  for (const item of work) {
+    const { c, deadline, checkoutDay } = item;
+    let earliest = item.earliest;
+    // Same-/next-day turnaround: if the next dog arrives on or before the normal
+    // day-after-checkout, clean on the checkout day itself (unless that day is blocked).
+    if (deadline && checkoutDay && deadline <= earliest &&
+        !getKennelBlocksOn(c.kennel_number, checkoutDay).length) {
+      earliest = checkoutDay;
     }
-
+    // Assign the earliest free day (one cleaning per day), advancing past taken days
+    // — but never past the deadline (if it can't fit, accept a shared/stacked day).
+    let assigned = earliest;
+    while (dayCounts[assigned]) {
+      const nxt = addDays(assigned, 1);
+      if (deadline && nxt > deadline) break;   // would miss the check-in — accept a shared day
+      assigned = nxt;
+    }
     assigned = applyManual(c, assigned);
     dayCounts[assigned] = (dayCounts[assigned] || 0) + 1;
-    if (assigned <= td) mustComplete = true;
-    else if (c.manual_date) mustComplete = false;  // manually pushed to a future day — not urgent
-
+    // Urgent (red) only when the kennel is needed today/tomorrow, or the cleaning
+    // is already overdue — NOT merely because it lands on today.
+    const overdue = assigned < td;
+    const urgent  = overdue || (!!deadline && deadline <= tmr);
     const prev = c.scheduled_date;
     c.scheduled_date = assigned;
-    c.must_complete  = mustComplete;
-    c._next_checkin  = limit || null;
-
-    if (prev !== assigned) {
-      writebacks.push({ id: c.id, scheduled_date: assigned });
-    }
+    c.must_complete  = urgent;
+    c._next_checkin  = deadline || null;
+    if (prev !== assigned) writebacks.push({ id: c.id, scheduled_date: assigned });
   }
 
   // Persist scheduled_date changes back to the DB (fire-and-forget — renders
@@ -1321,10 +1284,10 @@ function renderCleanings(cleanings) {
   });
   ordered.forEach(c => {
     const overdue   = c.scheduled_date && c.scheduled_date < td;
-    const dueToday  = c.scheduled_date && c.scheduled_date === td;
-    // Red = must be done today (due today or already late). Tight-turnaround
-    // warnings (next check-in soon but not yet due) live in the Expanded view.
-    const isRed     = overdue || dueToday;
+    // Red = urgent: overdue, or the kennel's next check-in is today/tomorrow
+    // (c.must_complete is set by the scheduler). A cleaning merely scheduled for
+    // today, with no imminent check-in, is NOT red.
+    const isRed     = overdue || !!c.must_complete;
     // Yellow = backlog: more than one cleaning stacked on the same future day.
     const isYellow  = !isRed && c.scheduled_date && dayLoad[c.scheduled_date] > 1;
     const rowStyle  = isRed ? 'background:#fef2f2' : isYellow ? 'background:#fef9c3' : '';
