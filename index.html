@@ -574,7 +574,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 let _bookings = [], _cleanings = [], _tasks = [], _reminders = [],
     _shopping = [], _invoices = [], _households = [], _kennels = [],
     _dogs = [], _routines = [], _kennelBlocks = [],
-    _notes = [], _noteCategories = [];
+    _notes = [], _noteCategories = [], _invoiceItems = [];
 let _noteCatFilter = 'all';
 let _currentDogId = null;
 let _vaccRecords = []; // vaccination_records for _currentDogId (loaded lazily)
@@ -785,7 +785,7 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks, rNotes, rNoteCats] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks, rNotes, rNoteCats, rInvItems] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
@@ -799,6 +799,7 @@ async function loadAll() {
     db.from('kennel_blocks').select('*').order('start_date'),
     db.from('notes').select('*').eq('status','active').order('created_at', {ascending: false}),
     db.from('note_categories').select('*').order('sort_order').order('name'),
+    db.from('invoice_items').select('*').order('created_at'),
   ]);
 
   _bookings     = rBook.data   || [];
@@ -814,6 +815,7 @@ async function loadAll() {
   _kennelBlocks = rBlocks.data || [];
   _notes        = rNotes.data  || [];
   _noteCategories = rNoteCats.data || [];
+  _invoiceItems = rInvItems.data || [];
 
   // Auto-schedule pending cleanings: earliest date possible, max 1/day, prioritized
   // by each kennel's next check-in. Cleanings that must happen before an imminent
@@ -1718,6 +1720,8 @@ function renderInvoicePage() {
       const anyDropoff  = invs.some(i => i.outside_hours_dropoff);
       const anyGrace    = invs.some(i => i.grace_extension_applied);
       const graceNotes  = invs.map(i => i.grace_extension_notes).filter(Boolean).join(' · ');
+      const groupItems  = invs.flatMap(i => itemsForBooking(i.booking_id));
+      const groupItemsTotal = groupItems.reduce((s, it) => s + Number(it.amount || 0) * (it.quantity || 1), 0);
 
       // Per-dog billing line (always show — even single-dog groups benefit from this)
       const perDogLines = invs.map(i => {
@@ -1760,6 +1764,7 @@ function renderInvoicePage() {
           ${flagBadge(anyGrace,'Grace extension','badge-blue')}
           ${graceNotes ? `<div style="font-size:0.75rem;color:#64748b;margin-top:0.25rem">${graceNotes}</div>` : ''}
         </div>` : ''}
+        ${groupItems.length ? `<div style="font-size:0.8rem;color:#475569;margin-bottom:0.4rem">🛒 ${groupItems.length} store item${groupItems.length !== 1 ? 's' : ''} · $${groupItemsTotal.toFixed(2)}</div>` : ''}
         <div style="border-top:1px solid #f1f5f9;padding-top:0.3rem">${perDogLines}</div>
         ${bulkActions}
       </div>`;
@@ -2094,6 +2099,10 @@ function openLogCheckout(booking) {
     <div class="form-field" id="f-grace-notes-field" style="display:none">
       <label>Grace extension notes</label>
       <input type="text" id="f-grace-notes" placeholder="e.g. Extended to 19:30">
+    </div>
+    <div class="form-field">
+      <label>Store purchases / invoice items</label>
+      <div id="mb-items">${invoiceItemsHTML(b.id, 'mb-items')}</div>
     </div>`;
 
   openModal('Manage Booking: ' + b.dog_name + ' — K' + b.kennel_number, body, null);
@@ -4289,6 +4298,50 @@ async function markInvoicePaid(id) {
   await loadAll();
 }
 
+// ── Invoice line items (store purchases: food, treats, etc.) ──────────
+function itemsForBooking(bid) {
+  return (_invoiceItems || []).filter(x => x.booking_id === bid);
+}
+function invoiceItemsHTML(bid, containerId) {
+  const items = itemsForBooking(bid);
+  const rows = items.map(it => `<div style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;padding:0.2rem 0">
+      <span style="flex:1;min-width:0">${(it.description || '').replace(/</g,'&lt;')}${(it.quantity || 1) > 1 ? ` ×${it.quantity}` : ''}</span>
+      <span style="color:#475569">$${(Number(it.amount || 0) * (it.quantity || 1)).toFixed(2)}</span>
+      <button class="btn-icon" title="Remove" onclick="deleteInvoiceItem('${it.id}','${bid}','${containerId}')">×</button>
+    </div>`).join('') || '<div style="font-size:0.8rem;color:#94a3b8">No items yet.</div>';
+  const total = items.reduce((s, it) => s + Number(it.amount || 0) * (it.quantity || 1), 0);
+  const totalLine = items.length
+    ? `<div style="display:flex;justify-content:space-between;font-size:0.8rem;font-weight:600;border-top:1px solid #f1f5f9;margin-top:0.3rem;padding-top:0.3rem"><span>Items total</span><span>$${total.toFixed(2)}</span></div>`
+    : '';
+  return `${rows}${totalLine}
+    <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
+      <input id="${containerId}-desc" placeholder="Item (e.g. Dog food)" style="flex:1;min-width:0;padding:0.4rem 0.5rem;border:1px solid #cbd5e1;border-radius:6px;font-size:0.82rem">
+      <input id="${containerId}-qty" type="number" min="1" value="1" title="Quantity" style="width:3.2rem;padding:0.4rem;border:1px solid #cbd5e1;border-radius:6px;font-size:0.82rem">
+      <input id="${containerId}-amt" type="number" min="0" step="0.01" placeholder="$ each" title="Amount each" style="width:5rem;padding:0.4rem;border:1px solid #cbd5e1;border-radius:6px;font-size:0.82rem">
+      <button class="btn btn-sm btn-secondary" type="button" onclick="addInvoiceItem('${bid}','${containerId}')">Add</button>
+    </div>`;
+}
+async function addInvoiceItem(bid, containerId) {
+  const desc = (document.getElementById(containerId + '-desc').value || '').trim();
+  const qty  = parseInt(document.getElementById(containerId + '-qty').value, 10) || 1;
+  const amt  = parseFloat(document.getElementById(containerId + '-amt').value) || 0;
+  if (!desc) { showToast('Enter an item description', 'error'); return; }
+  const { data, error } = await db.from('invoice_items')
+    .insert({ booking_id: bid, description: desc, quantity: qty, amount: amt }).select();
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  if (data) _invoiceItems.push(...data);
+  const el = document.getElementById(containerId);
+  if (el) el.innerHTML = invoiceItemsHTML(bid, containerId);
+  showToast('Item added');
+}
+async function deleteInvoiceItem(id, bid, containerId) {
+  const { error } = await db.from('invoice_items').delete().eq('id', id);
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  _invoiceItems = _invoiceItems.filter(x => x.id !== id);
+  const el = document.getElementById(containerId);
+  if (el) el.innerHTML = invoiceItemsHTML(bid, containerId);
+}
+
 function openInvoiceDetail(id) {
   const i = _invoices.find(x => x.id === id);
   if (!i) return;
@@ -4324,6 +4377,10 @@ function openInvoiceDetail(id) {
       </div>
       ${i.grace_extension_notes ? `<div style="font-size:0.8rem;color:#64748b;margin-top:0.4rem">${i.grace_extension_notes}</div>` : ''}
     </div>` : ''}
+    <div style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid #f1f5f9">
+      <div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.4rem">Store purchases / invoice items</div>
+      <div id="inv-items">${invoiceItemsHTML(i.booking_id, 'inv-items')}</div>
+    </div>
     <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
       ${i.status === 'pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}');closeModal()">Mark Sent</button>` : ''}
       ${i.status !== 'paid' ? `<button class="btn btn-sm btn-success" onclick="markInvoicePaid('${i.id}');closeModal()">Mark Paid</button>` : ''}
