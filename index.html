@@ -846,7 +846,7 @@ async function autoScheduleCleanings() {
   // earliestFree[k]: earliest date the kennel is physically free to clean.
   // Active bookings keep the kennel occupied until their check_out_date.
   const earliestFree = {};
-  for (let k = 1; k <= 10; k++) earliestFree[k] = td;
+  for (let k = 1; k <= 11; k++) earliestFree[k] = td;
   _bookings.filter(b => b.status === 'active').forEach(b => {
     if (b.check_out_date && b.check_out_date > earliestFree[b.kennel_number]) {
       earliestFree[b.kennel_number] = b.check_out_date;
@@ -1981,10 +1981,22 @@ function openBookingChooser(bookingId) {
 }
 
 // ── Booking move helpers (per-dog kennel edit + warn-and-swap) ─────────
+// Kennel <option> list. Kennels 1-10 plus VIP (11). VIP is manual-only, so it's
+// offered in staff dropdowns (move/transfer/add) but never on the Status Card or
+// customer online booking.
+function kennelOptionList(selectedKennel, { includeVip = true } = {}) {
+  const opts = [];
+  for (let i = 1; i <= 10; i++) {
+    opts.push(`<option value="${i}" ${i === selectedKennel ? 'selected' : ''}>K${i}</option>`);
+  }
+  if (includeVip || selectedKennel === 11) {
+    opts.push(`<option value="11" ${selectedKennel === 11 ? 'selected' : ''}>VIP</option>`);
+  }
+  return opts.join('');
+}
+
 function mbKennelOptions(selectedKennel) {
-  return [...Array(10)].map((_, i) =>
-    `<option value="${i+1}" ${(i+1) === selectedKennel ? 'selected' : ''}>K${i+1}</option>`
-  ).join('');
+  return kennelOptionList(selectedKennel);
 }
 
 function mbDogKennelRow(b) {
@@ -2117,9 +2129,15 @@ function openLogCheckout(booking) {
   const cancelBtn = !isCompleted
     ? `<button class="btn btn-danger" id="mb-cancel-btn" onclick="cancelBooking('${b.id}')" style="margin-right:auto">Cancel Booking</button>`
     : '';
+  // Transfer to a different kennel mid-stay (active/pending only). Completed days
+  // stay on the current kennel; the rest move to the new one.
+  const transferBtn = !isCompleted
+    ? `<button class="btn btn-secondary" id="mb-transfer-btn" onclick="openTransferKennel('${b.id}')">⇄ Transfer Kennel</button>`
+    : '';
   document.getElementById('modal-footer').innerHTML = `
     ${cancelBtn}
     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    ${transferBtn}
     <button class="btn btn-primary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save changes</button>
     <button class="btn btn-secondary" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">${checkoutLabel}</button>`;
 }
@@ -2369,6 +2387,131 @@ function toggleGraceNotes(cb) {
 }
 
 // ============================================================
+// ACTION: TRANSFER A BOOKING TO A NEW KENNEL (mid-stay split)
+// ============================================================
+// Moves a booking to a different kennel from a chosen date. Days already completed
+// (check-in .. transferDate-1) stay on the current kennel as a historical segment;
+// the remainder (transferDate .. check-out) continues in the new kennel. The old
+// kennel gets its own post-checkout cleaning, so cleanings behave as if these were
+// two separate bookings. Repeatable: transfer again to move the continuing segment.
+function openTransferKennel(bookingId) {
+  const b = _bookings.find(x => x.id === bookingId);
+  if (!b) { showToast('Booking not found', 'error'); return; }
+  const curLabel = b.kennel_number === 11 ? 'VIP' : 'K' + b.kennel_number;
+  // Default transfer date: today if the stay is underway, else the check-in date.
+  const today = todayStr();
+  const defDate = (b.check_in_date && b.check_in_date > today) ? b.check_in_date
+                : (b.check_out_date && b.check_out_date < today) ? b.check_out_date
+                : today;
+  // Target kennel options exclude the current kennel.
+  const targetOpts = kennelOptionList(null)
+    .replace(`<option value="${b.kennel_number}" >`, `<option value="${b.kennel_number}" disabled>`);
+  const body = `
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
+      <strong>${b.dog_name}</strong> is currently in <strong>${curLabel}</strong> (${fmtDate(b.check_in_date)} → ${fmtDate(b.check_out_date)}).
+      Days before the transfer date stay on ${curLabel}; the rest move to the new kennel.
+    </div>
+    <div class="form-row-2">
+      <div class="form-field"><label>New kennel *</label>
+        <select id="tk-kennel">${targetOpts}</select>
+      </div>
+      <div class="form-field"><label>Transfer date (first night in new kennel) *</label>
+        <input type="date" id="tk-date" value="${defDate}" min="${b.check_in_date || ''}" max="${b.check_out_date || ''}">
+      </div>
+    </div>
+    <div style="font-size:0.78rem;color:#64748b">Tip: pick the check-in date to move the whole booking with no split.</div>`;
+  openModal('Transfer ' + b.dog_name + ' — from ' + curLabel, body, null);
+  document.getElementById('modal-footer').innerHTML = `
+    <button class="btn btn-secondary" onclick="openLogCheckoutById('${b.id}')">Back</button>
+    <button class="btn btn-primary" id="tk-go" onclick="doTransferKennel('${b.id}')">Transfer</button>`;
+}
+
+async function doTransferKennel(bookingId) {
+  const btn = document.getElementById('tk-go');
+  btn.disabled = true; btn.textContent = 'Transferring…';
+  try {
+    const b = _bookings.find(x => x.id === bookingId);
+    if (!b) throw new Error('Booking not found');
+    const newKennel = parseInt(document.getElementById('tk-kennel').value, 10);
+    const D = document.getElementById('tk-date').value;
+    if (!newKennel) throw new Error('Pick a kennel');
+    if (newKennel === b.kennel_number) throw new Error('That is the current kennel');
+    if (!D) throw new Error('Pick a transfer date');
+    if (b.check_out_date && D > b.check_out_date) throw new Error('Transfer date is after the checkout date');
+
+    const oldKennel = b.kennel_number;
+    const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0,10); };
+
+    // Whole-booking move (transfer on/before check-in): just change the kennel.
+    if (!b.check_in_date || D <= b.check_in_date) {
+      const { error } = await db.from('bookings')
+        .update({ kennel_number: newKennel, updated_at: new Date().toISOString() })
+        .eq('id', b.id);
+      if (error) throw error;
+      closeModal();
+      showToast(`${b.dog_name} moved to ${newKennel === 11 ? 'VIP' : 'K' + newKennel}`);
+      await loadAll();
+      return;
+    }
+
+    // Split: historical segment stays on the old kennel (check-in .. D-1); the
+    // continuing booking moves to the new kennel from D.
+    const lastNightOld = addDays(D, -1);
+    // Past split → old-kennel segment is done (completed). Future split → still
+    // upcoming (pending), so the auto-scheduler provisions its cleaning.
+    const histStatus = lastNightOld < todayStr() ? 'completed' : 'pending';
+    const histNote = `Transferred to ${newKennel === 11 ? 'VIP' : 'K' + newKennel} on ${D} — days in ${oldKennel === 11 ? 'VIP' : 'K' + oldKennel}`;
+    const { data: hist, error: histErr } = await db.from('bookings').insert({
+      dog_name: b.dog_name,
+      dog_id: b.dog_id || null,
+      kennel_number: oldKennel,
+      check_in_date: b.check_in_date,
+      check_out_date: lastNightOld,
+      status: histStatus,
+      household_id: b.household_id || null,
+      booking_group_id: null,
+      off_site_pickup: b.off_site_pickup || false,
+      notes: histNote,
+    }).select('id').single();
+    if (histErr) throw histErr;
+
+    // Continuing segment → new kennel from D.
+    const contNote = (b.notes ? b.notes + ' · ' : '') + `Transferred from ${oldKennel === 11 ? 'VIP' : 'K' + oldKennel} on ${D} (full stay began ${b.check_in_date})`;
+    const { error: contErr } = await db.from('bookings')
+      .update({ kennel_number: newKennel, check_in_date: D, notes: contNote, updated_at: new Date().toISOString() })
+      .eq('id', b.id);
+    if (contErr) throw contErr;
+
+    // For a past (completed) split, create the old-kennel cleaning now. For a future
+    // split the auto-scheduler provisions it from the pending historical segment.
+    if (histStatus === 'completed') {
+      const { data: existingClean } = await db.from('cleanings')
+        .select('id').eq('kennel_number', oldKennel)
+        .not('status', 'in', '("completed","skipped")')
+        .gte('scheduled_date', lastNightOld)
+        .limit(1);
+      if (!existingClean || !existingClean.length) {
+        await db.from('cleanings').insert({
+          kennel_number: oldKennel,
+          type: 'full',
+          reason: `Post-transfer: ${b.dog_name} left ${oldKennel === 11 ? 'VIP' : 'K' + oldKennel} (${D})`,
+          scheduled_date: D,
+          status: 'pending',
+          booking_id: hist.id,
+        });
+      }
+    }
+
+    closeModal();
+    showToast(`${b.dog_name} transferred to ${newKennel === 11 ? 'VIP' : 'K' + newKennel} from ${fmtDate(D)}`);
+    await loadAll();
+  } catch (e) {
+    showToast(e.message || 'Error transferring', 'error');
+    btn.disabled = false; btn.textContent = 'Transfer';
+  }
+}
+
+// ============================================================
 // ACTION: LOG CHECK-IN
 // ============================================================
 function openLogCheckin(booking) {
@@ -2487,9 +2630,7 @@ function openBlockKennel(kennelNum) {
 }
 
 function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
-  const kennelOptions = [...Array(10)].map((_, i) =>
-    `<option value="${i+1}" ${(i+1) === defaultKennelNum ? 'selected' : ''}>K${i+1}</option>`
-  ).join('');
+  const kennelOptions = kennelOptionList(defaultKennelNum);
   const start = defaultStartDate || todayStr();
   const body = `
     <div class="form-row-2">
@@ -2607,9 +2748,7 @@ function openManageKennelBlocks(kennelNum) {
 function openEditKennelBlock(blockId) {
   const b = (_kennelBlocks || []).find(x => x.id === blockId);
   if (!b) { showToast('Block not found', 'error'); return; }
-  const kennelOptions = [...Array(10)].map((_, i) =>
-    `<option value="${i+1}" ${(i+1) === b.kennel_number ? 'selected' : ''}>K${i+1}</option>`
-  ).join('');
+  const kennelOptions = kennelOptionList(b.kennel_number);
   const body = `
     <div class="form-row-2">
       <div class="form-field"><label>Apply to *</label>
@@ -2773,9 +2912,7 @@ const MAX_DOGS_PER_BOOKING = 4;
 let _addBookingRows = 0;
 
 function abKennelOptions(defaultKennel) {
-  return [...Array(10)].map((_,i) =>
-    `<option value="${i+1}" ${defaultKennel === i+1 ? 'selected' : ''}>K${i+1}</option>`
-  ).join('');
+  return kennelOptionList(defaultKennel);
 }
 
 function abDogRow(idx, defaultKennel = null) {
@@ -3162,7 +3299,7 @@ function renderKennelCalendar() {
 
   // Build table
   let html = '<table class="kc-table"><thead><tr><th class="kc-corner kc-date-cell"></th>';
-  for (let k = 1; k <= 10; k++) html += `<th>K${k}</th>`;
+  for (let k = 1; k <= 11; k++) html += `<th>${k === 11 ? 'VIP' : 'K' + k}</th>`;
   html += '</tr></thead><tbody>';
 
   for (let day = 1; day <= daysInMonth; day++) {
@@ -3173,7 +3310,7 @@ function renderKennelCalendar() {
     const isToday = (ds === today);
     html += `<tr class="${isToday ? 'kc-today' : ''}">`;
     html += `<td class="kc-date-cell${isWeekend ? ' kc-weekend' : ''}">${kcFmtRow(d)}</td>`;
-    for (let k = 1; k <= 10; k++) {
+    for (let k = 1; k <= 11; k++) {
       const key     = `${k}|${ds}`;
       const bArr    = occupancy[key];
       const bCancArr = occupancyCancelled[key];
@@ -3412,7 +3549,7 @@ function kcxBuildGridCsv(from, to, opts) {
 
   // Header
   const header = ['Date'];
-  for (let k = 1; k <= 10; k++) header.push('K' + k);
+  for (let k = 1; k <= 11; k++) header.push(k === 11 ? 'VIP' : 'K' + k);
   const rows = [header];
 
   // Day-of-week formatter
@@ -3424,7 +3561,7 @@ function kcxBuildGridCsv(from, to, opts) {
     const ds = kcDateStr(d);
     const dateLabel = `${dow(d)} ${ds}`;
     const row = [dateLabel];
-    for (let k = 1; k <= 10; k++) {
+    for (let k = 1; k <= 11; k++) {
       const arr = occ[`${k}|${ds}`];
       const cln = cleaningMap[`${k}|${ds}`];
       const blks = getKennelBlocksOn(k, ds);
