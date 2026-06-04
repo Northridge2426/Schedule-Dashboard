@@ -3140,6 +3140,7 @@ function renderKennelCalendar() {
   // completed_date for completed (so history shows on the actual cleaning day).
   const cleaningMap = {};
   _cleanings.forEach(c => {
+    if (c.status === 'skipped') return;   // skipped/removed cleanings never render
     const dateKey = (c.status === 'completed' && c.completed_date) ? c.completed_date : c.scheduled_date;
     if (!dateKey) return;
     if (dateKey < monthStart || dateKey > monthEnd) return;
