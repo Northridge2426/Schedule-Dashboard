@@ -634,6 +634,12 @@ function fmtDate(d) {
   const [,m,day] = d.split('-');
   return `${MONTHS[+m-1]} ${+day}`;
 }
+// Like fmtDate but includes the year — used for expirations (e.g. "Oct 1, 2028").
+function fmtDateY(d) {
+  if (!d) return '—';
+  const [y,m,day] = d.split('-');
+  return `${MONTHS[+m-1]} ${+day}, ${y}`;
+}
 function fmtTime(t) {
   if (!t) return null;
   const [h,m] = t.split(':');
@@ -3661,9 +3667,9 @@ async function renderDogPage() {
   const soon        = currentRec?.expiration_date && !overdue && currentRec.expiration_date <= addDaysStr(td, 30);
   const currentBadge = !currentRec ? '<span class="badge badge-gray">No record on file</span>'
     : !currentRec.expiration_date ? '<span class="badge badge-gray">No expiration set</span>'
-    : overdue ? `<span class="badge badge-red">Overdue (expired ${fmtDate(currentRec.expiration_date)})</span>`
-    : soon    ? `<span class="badge badge-yellow">Expires ${fmtDate(currentRec.expiration_date)}</span>`
-              : `<span class="badge badge-green">Up to date — expires ${fmtDate(currentRec.expiration_date)}</span>`;
+    : overdue ? `<span class="badge badge-red">Overdue (expired ${fmtDateY(currentRec.expiration_date)})</span>`
+    : soon    ? `<span class="badge badge-yellow">Expires ${fmtDateY(currentRec.expiration_date)}</span>`
+              : `<span class="badge badge-green">Up to date — expires ${fmtDateY(currentRec.expiration_date)}</span>`;
 
   const PORTAL_TAG = '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem" title="Will be visible to the owner via the customer portal">owner-visible</span>';
   const STAFF_TAG  = '<span class="badge badge-gray" style="font-size:0.6rem;margin-left:0.3rem" title="Internal only — not exposed to the customer portal">staff only</span>';
@@ -3745,7 +3751,7 @@ function vaccRecordRow(r, isPending) {
     ? `<button class="btn btn-sm btn-secondary" onclick="viewVaccFile('${r.file_path}')">📄 View file</button>`
     : '<span style="color:#94a3b8;font-size:0.75rem">No file attached</span>';
   const exp = r.expiration_date
-    ? `<span style="color:#475569">Expires ${fmtDate(r.expiration_date)}</span>`
+    ? `<span style="color:#475569">Expires ${fmtDateY(r.expiration_date)}</span>`
     : '<span style="color:#94a3b8">No expiration set</span>';
   const sourceTag = r.source === 'customer'
     ? '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem">from owner</span>'
