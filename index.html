@@ -2109,6 +2109,8 @@ function openLogCheckout(booking) {
     </div>
     <div class="form-field">
       <div class="form-check"><input type="checkbox" id="f-pickup" ${b.off_site_pickup?'checked':''}><label for="f-pickup">🚗 Off-site pickup (collected dog at check-in)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-compassionate" ${b.compassionate_care?'checked':''}><label for="f-compassionate">💙 Compassionate Care (no charge)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-dogpound" ${b.dog_pound?'checked':''}><label for="f-dogpound">🏛️ Dog Pound — Village of Fort Simpson (excluded from boarding stats)</label></div>
       <div class="form-check"><input type="checkbox" id="f-offsite" ${inv?.off_site_delivery?'checked':''}><label for="f-offsite">🚗 Off-site delivery (dropping dog off at checkout)</label></div>
       <div class="form-check"><input type="checkbox" id="f-outside" ${inv?.outside_window_pickup?'checked':''}><label for="f-outside">🕐 Outside Hours Pickup</label></div>
       <div class="form-check"><input type="checkbox" id="f-dropoff" ${inv?.outside_hours_dropoff?'checked':''}><label for="f-dropoff">🕐 Outside Hours Drop-off</label></div>
@@ -2253,7 +2255,9 @@ async function manageBookingSave(bookingId) {
     const pickupEl = document.getElementById('f-pickup');
     if (pickupEl !== null) {
       const pickup = pickupEl.checked;
-      let pickupUpd = db.from('bookings').update({ off_site_pickup: pickup });
+      const compEl = document.getElementById('f-compassionate');
+      const dpEl = document.getElementById('f-dogpound');
+      let pickupUpd = db.from('bookings').update({ off_site_pickup: pickup, compassionate_care: compEl ? compEl.checked : false, dog_pound: dpEl ? dpEl.checked : false });
       if (b && b.booking_group_id) pickupUpd = pickupUpd.eq('booking_group_id', b.booking_group_id);
       else pickupUpd = pickupUpd.eq('id', bookingId);
       await pickupUpd;
@@ -2303,6 +2307,8 @@ async function manageBookingCheckout(bookingId) {
     const dropoff  = document.getElementById('f-dropoff').checked;
     const grace    = document.getElementById('f-grace').checked;
     const graceNotes = document.getElementById('f-grace-notes')?.value || null;
+    const compassionate = document.getElementById('f-compassionate')?.checked ?? false;
+    const dogpound      = document.getElementById('f-dogpound')?.checked ?? false;
 
     if (!outTime) throw new Error('Check-out time is required');
 
@@ -2323,6 +2329,8 @@ async function manageBookingCheckout(bookingId) {
       check_out_date: outDate,
       check_out_time: outTime,
       off_site_pickup: pickup,
+      compassionate_care: compassionate,
+      dog_pound: dogpound,
       status: 'completed',
       updated_at: new Date().toISOString(),
     }).in('id', bookingIds);
@@ -2337,6 +2345,7 @@ async function manageBookingCheckout(bookingId) {
       invoice_date: invDate,
     };
     for (const bid of bookingIds) {
+      if (compassionate) continue; // no charge - skip invoice
       const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bid).maybeSingle();
       if (inv) {
         await db.from('invoices').update(invData).eq('id', inv.id);
@@ -3037,6 +3046,8 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     </div>
     <div class="form-field">
       <div class="form-check"><input type="checkbox" id="f-shared"><label for="f-shared">⚠ Shared kennel — owner insists (rare exception)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-comp-new"><label for="f-comp-new">💙 Compassionate Care (no charge)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-dogpound-new"><label for="f-dogpound-new">🏛️ Dog Pound — Village of Fort Simpson</label></div>
     </div>
     <div class="form-field"><label>Notes</label><textarea id="f-notes" rows="2" placeholder="Optional"></textarea></div>`;
 
@@ -3124,8 +3135,12 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
 
     // Multi-dog bookings share a booking_group_id so future edits cascade
     const groupId = dogs.length > 1 ? crypto.randomUUID() : null;
+    const abComp = document.getElementById('f-comp-new')?.checked || false;
+    const abDp   = document.getElementById('f-dogpound-new')?.checked || false;
     const rowsToInsert = dogs.map(d => ({
       dog_name: d.name,
+      compassionate_care: abComp,
+      dog_pound: abDp,
       dog_id:   d.dogId || null,
       kennel_number: d.kennel,
       check_in_date: cinDate,
