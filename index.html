@@ -938,8 +938,12 @@ async function autoScheduleCleanings() {
   //   • deadline    — the next check-in needing this kennel clean (drives priority + urgency)
   //   • checkoutDay — anchored only, to snap onto for same-/next-day turnarounds
   const work = [];
+  const cancelledCleanings = [];
   for (const c of pendingCleanings) {
     const lb = c.booking_id ? bookingById[c.booking_id] : null;
+    // Booking was cancelled after its post-checkout cleaning was provisioned — the dog
+    // never stayed, so the cleaning isn't needed. Remove it (view + DB).
+    if (lb && lb.status === 'cancelled') { cancelledCleanings.push(c.id); continue; }
     const anchored = !!(lb && (lb.status === 'pending' || lb.status === 'active') &&
                         lb.check_out_date && lb.check_out_date >= lb.check_in_date);
     // Anchored cleaning follows its booking if the booking was moved between kennels.
@@ -960,6 +964,12 @@ async function autoScheduleCleanings() {
       deadline = nextCheckinOnOrAfter(c.kennel_number, td);
     }
     work.push({ c, anchored, earliest, deadline, checkoutDay });
+  }
+
+  if (cancelledCleanings.length) {
+    const delSet = new Set(cancelledCleanings);
+    _cleanings = _cleanings.filter(x => !delSet.has(x.id));
+    (async () => { try { await db.from('cleanings').delete().in('id', cancelledCleanings); } catch(e) {} })();
   }
 
   // Priority: the kennel whose next check-in is soonest gets the soonest slot.
