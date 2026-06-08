@@ -652,9 +652,34 @@ let _historyLoaded = false;
 const $login = document.getElementById('login-view');
 const $dash  = document.getElementById('dashboard-view');
 
+// ---- Access control (interface-level page gating) ----
+// Admins see every page. Anyone else who logs in is "limited" and only sees the
+// pages in LIMITED_ALLOWED_TABS. To give someone full access, add their email
+// (lowercase) to ADMIN_EMAILS and re-publish.
+const ADMIN_EMAILS = ['williamdwilkes@gmail.com'];
+const LIMITED_ALLOWED_TABS = ['overview','invoices','shopping','customers','dogs','reports'];
+let _userRole = 'admin';
+
+function isTabAllowed(tab){ return _userRole === 'admin' || LIMITED_ALLOWED_TABS.includes(tab); }
+
+function applyAccess(){
+  const limited = _userRole !== 'admin';
+  const topVisible  = { overview:true, schedule:!limited, invoices:true };
+  Object.keys(topVisible).forEach(t=>{ const el=document.getElementById('tab-'+t); if(el) el.style.display = topVisible[t] ? '' : 'none'; });
+  const moreVisible = { reminders:!limited, notes:!limited, shopping:true, tasks:!limited, customers:true, dogs:true, reports:true, backup:!limited };
+  Object.keys(moreVisible).forEach(t=>{ const el=document.getElementById('more-'+t); if(el) el.style.display = moreVisible[t] ? '' : 'none'; });
+}
+
 db.auth.onAuthStateChange((_event, session) => {
-  if (session) { $login.style.display = 'none'; $dash.style.display = 'block'; loadAll(); }
-  else         { $login.style.display = 'flex';  $dash.style.display = 'none'; }
+  if (session) {
+    const email = ((session.user && session.user.email) || '').toLowerCase();
+    _userRole = ADMIN_EMAILS.includes(email) ? 'admin' : 'limited';
+    applyAccess();
+    $login.style.display = 'none'; $dash.style.display = 'block';
+    loadAll();
+  } else {
+    $login.style.display = 'flex'; $dash.style.display = 'none';
+  }
 });
 
 document.getElementById('magic-link-btn').addEventListener('click', async () => {
@@ -4809,6 +4834,7 @@ async function purchaseShopping(id, item) {
 const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','reports'];
 
 function switchTab(tab) {
+  if (!isTabAllowed(tab)) tab = 'overview';
   const allViews = ['overview','schedule','invoices', ...MORE_TABS];
   allViews.forEach(t => {
     const view = document.getElementById(t + '-view');
