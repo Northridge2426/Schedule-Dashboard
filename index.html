@@ -180,9 +180,13 @@
     .reminder-text { font-size: 0.875rem; flex: 1; }
 
     /* ---- Shopping ---- */
-    .shop-row { font-size: 0.875rem; padding: 0.35rem 0; border-bottom: 1px solid #f8fafc; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; cursor: pointer; }
-    .shop-row:hover .shop-item-name { text-decoration: underline; color: #64748b; }
+    .shop-row { font-size: 0.875rem; padding: 0.4rem 0; border-bottom: 1px solid #f8fafc; display: flex; align-items: center; gap: 0.55rem; }
     .shop-row:last-child { border-bottom: none; }
+    .shop-check { width: 18px; height: 18px; flex: 0 0 auto; cursor: pointer; accent-color: #16a34a; }
+    .shop-item-name { flex: 1; min-width: 0; }
+    .shop-store-sel { font-size: 0.72rem; padding: 0.12rem 0.3rem; border: 1px solid #e2e8f0; border-radius: 5px; color: #64748b; background: white; max-width: 9.5rem; cursor: pointer; }
+    .shop-group-header { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8; font-weight: 700; margin: 0.7rem 0 0.15rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.15rem; }
+    .shop-group-header:first-child { margin-top: 0; }
 
     /* ---- Modal ---- */
     .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 50; display: flex; align-items: flex-end; justify-content: center; padding: 0; }
@@ -1622,17 +1626,50 @@ function switchShopTab(tab) {
   renderShopping();
 }
 
+function shopStores() {
+  return [...new Set(_shopping.map(i => i.store).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+}
+function shopRowHTML(i) {
+  const q = s => String(s).replace(/'/g, "\\'");
+  const a = s => String(s).replace(/"/g, '&quot;');
+  const opts = ['<option value="">\u2014 store \u2014</option>']
+    .concat(shopStores().map(s => `<option value="${a(s)}" ${s===i.store?'selected':''}>${s}</option>`))
+    .concat(['<option value="__new__">+ Add store\u2026</option>']).join('');
+  return `<div class="shop-row">
+    <input type="checkbox" class="shop-check" title="Mark purchased" onchange="purchaseShopping('${i.id}','${q(i.item)}')">
+    <span class="shop-item-name">${i.item}</span>
+    <select class="shop-store-sel" onchange="assignStore('${i.id}', this)">${opts}</select>
+  </div>`;
+}
 function renderShopping() {
   const items = _shopping.filter(i => i.list_name === _shopTab);
   const listLabel = _shopTab === 'yellowknife' ? 'Yellowknife' : _shopTab === 'online' ? 'Online' : 'Local';
-  document.getElementById('shopping-body').innerHTML = items.length
-    ? items.map(i =>
-        `<div class="shop-row" onclick="purchaseShopping('${i.id}','${i.item.replace(/'/g,"\\'")}')">
-          <span class="shop-item-name">${i.item}</span>
-          <span style="font-size:0.75rem;color:#cbd5e1">tap to purchase</span>
-        </div>`
-      ).join('')
-    : `<div class="empty">${listLabel} list is empty.</div>`;
+  const bodyEl = document.getElementById('shopping-body');
+  if (!items.length) { bodyEl.innerHTML = `<div class="empty">${listLabel} list is empty.</div>`; return; }
+  const groups = {};
+  items.forEach(i => { const k = i.store || ''; (groups[k] = groups[k] || []).push(i); });
+  const storeKeys = Object.keys(groups).filter(k => k).sort((a,b)=>a.localeCompare(b));
+  const ordered = storeKeys.slice();
+  if (groups['']) ordered.push('');
+  const showHeaders = storeKeys.length > 0;
+  let html = '';
+  for (const k of ordered) {
+    if (showHeaders) html += `<div class="shop-group-header">${k || 'Uncategorized'}</div>`;
+    html += groups[k].map(shopRowHTML).join('');
+  }
+  bodyEl.innerHTML = html;
+}
+async function assignStore(id, sel) {
+  let val = sel.value;
+  if (val === '__new__') {
+    const name = (prompt('New store name (e.g. Independent, Canadian Tire):') || '').trim();
+    if (!name) { renderShopping(); return; }
+    val = name;
+  }
+  const { error } = await db.from('shopping_items').update({ store: val || null }).eq('id', id);
+  if (error) { showToast(error.message, 'error'); return; }
+  const it = _shopping.find(x => x.id === id); if (it) it.store = val || null;
+  renderShopping();
 }
 
 // ============================================================
@@ -4702,7 +4739,6 @@ function openAddTask(category) {
 // ACTION: SHOPPING
 // ============================================================
 async function purchaseShopping(id, item) {
-  if (!confirm(`Mark "${item}" as purchased?`)) return;
   const { error } = await db.from('shopping_items').update({ status: 'purchased' }).eq('id', id);
   if (error) { showToast('Error', 'error'); return; }
   showToast(`"${item}" marked purchased`);
@@ -5290,11 +5326,14 @@ async function toggleCompletion(taskKey, el, dateStr) {
 
 function openAddShopping() {
   const listLabel = _shopTab === 'yellowknife' ? 'Yellowknife' : _shopTab === 'online' ? 'Online' : 'Local';
-  const body = `<div class="form-field"><label>Item *</label><input type="text" id="f-shop-item" placeholder="e.g. Chicken breast"></div>`;
+  const dl = shopStores().map(s => `<option value="${String(s).replace(/"/g,'&quot;')}">`).join('');
+  const body = `<div class="form-field"><label>Item *</label><input type="text" id="f-shop-item" placeholder="e.g. Chicken breast"></div>
+    <div class="form-field"><label>Store (optional)</label><input type="text" id="f-shop-store" list="shop-store-list" placeholder="e.g. Independent"><datalist id="shop-store-list">${dl}</datalist></div>`;
   openModal('Add to ' + listLabel + ' List', body, async () => {
     const item = document.getElementById('f-shop-item').value.trim();
     if (!item) throw new Error('Item name is required');
-    const { error } = await db.from('shopping_items').insert({ list_name: _shopTab, item, status: 'active' });
+    const store = document.getElementById('f-shop-store').value.trim() || null;
+    const { error } = await db.from('shopping_items').insert({ list_name: _shopTab, item, status: 'active', store });
     if (error) throw error;
     closeModal();
     showToast('Added: ' + item);
