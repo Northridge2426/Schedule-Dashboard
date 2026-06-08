@@ -378,6 +378,7 @@
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
     <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
     <button class="more-btn" id="more-reports" onclick="switchTab('reports')">📊 Reports</button>
+    <button class="more-btn" id="more-users" onclick="switchTab('users')">👤 Users</button>
     <button class="more-btn" id="more-backup" onclick="toggleMoreMenu();downloadBackup(this)">⬇ Backup data</button>
   </div>
 
@@ -526,6 +527,19 @@
     </div>
   </div>
 
+  <!-- USERS PAGE (admin only) -->
+  <div id="users-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header">
+          <h2>Users</h2>
+          <button class="btn-add" onclick="openAddUser()">+ Add User</button>
+        </div>
+        <div class="card-body" id="users-body"><div class="loading">Loading&hellip;</div></div>
+      </div>
+    </div>
+  </div>
+
   <main id="overview-view">
 
     <!-- Kennel Status -->
@@ -652,13 +666,13 @@ let _historyLoaded = false;
 const $login = document.getElementById('login-view');
 const $dash  = document.getElementById('dashboard-view');
 
-// ---- Access control (interface-level page gating) ----
-// Admins see every page. Anyone else who logs in is "limited" and only sees the
-// pages in LIMITED_ALLOWED_TABS. To give someone full access, add their email
-// (lowercase) to ADMIN_EMAILS and re-publish.
-const ADMIN_EMAILS = ['williamdwilkes@gmail.com'];
+// ---- Access control ----
+// The invited-users list + roles live in the `app_users` table and are enforced
+// by database row-level security. Admins see every page; "limited" users see
+// only LIMITED_ALLOWED_TABS. Manage users from the Users page (admin only).
 const LIMITED_ALLOWED_TABS = ['overview','invoices','shopping','customers','dogs','reports'];
-let _userRole = 'admin';
+let _userRole = 'limited';
+let _userEmail = '';
 
 function isTabAllowed(tab){ return _userRole === 'admin' || LIMITED_ALLOWED_TABS.includes(tab); }
 
@@ -666,14 +680,25 @@ function applyAccess(){
   const limited = _userRole !== 'admin';
   const topVisible  = { overview:true, schedule:!limited, invoices:true };
   Object.keys(topVisible).forEach(t=>{ const el=document.getElementById('tab-'+t); if(el) el.style.display = topVisible[t] ? '' : 'none'; });
-  const moreVisible = { reminders:!limited, notes:!limited, shopping:true, tasks:!limited, customers:true, dogs:true, reports:true, backup:!limited };
+  const moreVisible = { reminders:!limited, notes:!limited, shopping:true, tasks:!limited, customers:true, dogs:true, reports:true, users:!limited, backup:!limited };
   Object.keys(moreVisible).forEach(t=>{ const el=document.getElementById('more-'+t); if(el) el.style.display = moreVisible[t] ? '' : 'none'; });
 }
 
-db.auth.onAuthStateChange((_event, session) => {
+db.auth.onAuthStateChange(async (_event, session) => {
   if (session) {
-    const email = ((session.user && session.user.email) || '').toLowerCase();
-    _userRole = ADMIN_EMAILS.includes(email) ? 'admin' : 'limited';
+    _userEmail = ((session.user && session.user.email) || '').toLowerCase();
+    let role = null;
+    try {
+      const { data } = await db.from('app_users').select('role').eq('email', _userEmail).maybeSingle();
+      role = data ? data.role : null;
+    } catch (e) { role = null; }
+    if (!role) {
+      await db.auth.signOut();
+      const msg = document.getElementById('login-msg');
+      if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'This account is not authorized. Please contact the kennel owner to be added.'; }
+      return;
+    }
+    _userRole = role;
     applyAccess();
     $login.style.display = 'none'; $dash.style.display = 'block';
     loadAll();
@@ -4831,7 +4856,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','reports'];
+const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','reports','users'];
 
 function switchTab(tab) {
   if (!isTabAllowed(tab)) tab = 'overview';
@@ -4864,6 +4889,7 @@ function switchTab(tab) {
     else renderDogPage();
   }
   if (tab === 'reports') renderReports();
+  if (tab === 'users') renderUsers();
 }
 
 function toggleMoreMenu() {
@@ -4929,6 +4955,64 @@ function reportCustomChange(){
 }
 
 function toggleReportCompare(checked){ _repCompare=checked; renderReports(); }
+
+// ============================================================
+// USERS (admin-only) — manage who can sign in and their role.
+// Backed by the app_users table; real access is enforced by database RLS.
+// ============================================================
+let _appUsers = [];
+async function renderUsers(){
+  const body=document.getElementById('users-body');
+  if (!body) return;
+  const { data, error } = await db.from('app_users').select('*').order('role').order('email');
+  if (error){ body.innerHTML='<div class="empty">Could not load users: '+error.message+'</div>'; return; }
+  _appUsers = data || [];
+  const esc = s => (s||'').replace(/'/g, "\\'");
+  const rows = _appUsers.map(u=>{
+    const self = u.email === _userEmail;
+    return `<div class="rep-top-row" style="gap:0.75rem">
+      <div style="flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis">${u.email}${self?' <span class="rep-top-sub">(you)</span>':''}</div>
+      <select onchange="changeUserRole('${esc(u.email)}', this.value)" ${self?'disabled':''} style="font-size:0.8rem;padding:0.25rem 0.4rem;border:1px solid #e2e8f0;border-radius:6px">
+        <option value="admin" ${u.role==='admin'?'selected':''}>Admin — full access</option>
+        <option value="limited" ${u.role==='limited'?'selected':''}>Limited</option>
+      </select>
+      <button class="btn btn-sm btn-secondary" onclick="deleteUser('${esc(u.email)}')" ${self?'disabled':''}>Remove</button>
+    </div>`;
+  }).join('');
+  body.innerHTML = (rows || '<div class="empty">No users yet.</div>') +
+    `<div style="font-size:0.72rem;color:#94a3b8;margin-top:0.85rem;line-height:1.5">
+      Only the emails listed here can sign in and see any data. <b>Admin</b> sees every page and can manage users.
+      <b>Limited</b> users see only Overview, Invoices, Shopping, Customers, Dogs and Reports (with full edit on those pages).
+      A new user signs in by entering their email on the login screen and clicking the magic link emailed to them.
+    </div>`;
+}
+
+async function openAddUser(){
+  const email = (prompt('Email address of the person to give access to:') || '').trim().toLowerCase();
+  if (!email) return;
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ showToast("That doesn't look like a valid email.", 'error'); return; }
+  const admin = confirm('Give this user FULL admin access?\n\nOK = Admin (sees and manages everything)\nCancel = Limited (Overview, Invoices, Shopping, Customers, Dogs, Reports)');
+  const { error } = await db.from('app_users').upsert({ email, role: admin ? 'admin' : 'limited' }, { onConflict: 'email' });
+  if (error){ showToast('Could not add user: '+error.message, 'error'); return; }
+  showToast('User added — they can now sign in with their email.', 'success');
+  renderUsers();
+}
+
+async function changeUserRole(email, role){
+  const { error } = await db.from('app_users').update({ role }).eq('email', email);
+  if (error){ showToast('Could not update role: '+error.message, 'error'); }
+  else showToast('Role updated.', 'success');
+  renderUsers();
+}
+
+async function deleteUser(email){
+  if (!confirm('Remove '+email+'? They will immediately lose all access.')) return;
+  const { error } = await db.from('app_users').delete().eq('email', email);
+  if (error){ showToast('Could not remove user: '+error.message, 'error'); return; }
+  showToast('User removed.', 'success');
+  renderUsers();
+}
+
 
 function getReportRange(){
   const a=_repAnchor;
