@@ -902,6 +902,9 @@ async function autoScheduleCleanings() {
       status: 'pending',
       booking_id: b.id,
     });
+    // Mark this kennel+checkout covered so sibling dogs in the same multi-dog
+    // booking don't each spawn their own cleaning (one cleaning per kennel).
+    coveredKennelCheckouts.add(`${b.kennel_number}|${b.check_out_date}`);
   }
   if (toCreate.length) {
     // Plain insert (not upsert): the partial unique index on (kennel_number,
@@ -983,7 +986,7 @@ async function autoScheduleCleanings() {
     let assigned = earliest;
     while (dayCounts[assigned]) {
       const nxt = addDays(assigned, 1);
-      if (deadline && nxt > deadline) break;   // would miss the check-in — accept a shared day
+      if (deadline && nxt >= deadline) break;  // never clean on/after the next check-in — stack on an earlier day so every kennel needed that day is ready (the one-per-day spread yields to a check-in)
       assigned = nxt;
     }
     assigned = applyManual(c, assigned);
