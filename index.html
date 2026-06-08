@@ -119,6 +119,33 @@
     .inv-row:last-child { border-bottom: none; }
     .inv-row-check { margin-top: 0.25rem; width: 1rem; height: 1rem; cursor: pointer; accent-color: #22c55e; flex-shrink: 0; }
 
+    /* ---- Reports page ---- */
+    .rep-controls { background: white; border-radius: 12px; padding: 0.75rem 1rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.07); }
+    .rep-period-tabs { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+    .rep-ptab { padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.78rem; font-weight: 600; border: 1.5px solid #e2e8f0; background: white; cursor: pointer; color: #64748b; }
+    .rep-ptab.active { background: #1e293b; color: white; border-color: #1e293b; }
+    .rep-nav-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+    .rep-range-label { font-weight: 700; font-size: 0.95rem; color: #1e293b; text-align: center; flex: 1; }
+    .rep-custom { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.8rem; color: #475569; }
+    .rep-custom input[type=date] { border: 1.5px solid #e2e8f0; border-radius: 6px; padding: 0.25rem 0.4rem; font-size: 0.8rem; }
+    .rep-compare { display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: #475569; margin-top: 0.6rem; cursor: pointer; user-select: none; }
+    .rep-kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .rep-kpi { background: white; border-radius: 12px; padding: 0.85rem 0.95rem; box-shadow: 0 1px 3px rgba(0,0,0,0.07); }
+    .rep-kpi-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8; }
+    .rep-kpi-value { font-size: 1.7rem; font-weight: 800; color: #1e293b; line-height: 1.1; margin-top: 0.2rem; }
+    .rep-kpi-sub { font-size: 0.72rem; color: #94a3b8; margin-top: 0.15rem; }
+    .rep-delta { font-size: 0.74rem; font-weight: 700; margin-top: 0.25rem; }
+    .rep-delta.up { color: #16a34a; }
+    .rep-delta.down { color: #dc2626; }
+    .rep-delta.flat { color: #94a3b8; }
+    .rep-section-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; margin: 1.25rem 0 0.6rem; }
+    .rep-top-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9; font-size: 0.86rem; }
+    .rep-top-row:last-child { border-bottom: none; }
+    .rep-top-rank { width: 1.4rem; height: 1.4rem; border-radius: 50%; background: #1e293b; color: white; font-size: 0.74rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .rep-top-name { flex: 1; font-weight: 600; color: #1e293b; }
+    .rep-top-val { font-weight: 700; color: #1e293b; }
+    .rep-top-sub { font-size: 0.72rem; color: #94a3b8; font-weight: 400; }
+
     /* ---- Kennel details sub-sections ---- */
     .kd-section { margin-bottom: 0.75rem; }
     .kd-section:last-child { margin-bottom: 0; }
@@ -350,6 +377,7 @@
     <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
     <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
+    <button class="more-btn" id="more-reports" onclick="switchTab('reports')">📊 Reports</button>
     <button class="more-btn" id="more-backup" onclick="toggleMoreMenu();downloadBackup(this)">⬇ Backup data</button>
   </div>
 
@@ -465,6 +493,36 @@
   <div id="dogs-view" style="display:none">
     <div class="page-view" id="dogs-page-body">
       <div class="loading">Loading…</div>
+    </div>
+  </div>
+
+  <!-- REPORTS PAGE -->
+  <div id="reports-view" style="display:none">
+    <div class="page-view">
+      <h2 style="margin-bottom:0.75rem">Reports</h2>
+      <div class="rep-controls">
+        <div class="rep-period-tabs">
+          <button class="rep-ptab" id="rep-ptab-day"   onclick="setReportPeriod('day')">Day</button>
+          <button class="rep-ptab" id="rep-ptab-week"  onclick="setReportPeriod('week')">Week</button>
+          <button class="rep-ptab active" id="rep-ptab-month" onclick="setReportPeriod('month')">Month</button>
+          <button class="rep-ptab" id="rep-ptab-year"  onclick="setReportPeriod('year')">Year</button>
+          <button class="rep-ptab" id="rep-ptab-custom" onclick="setReportPeriod('custom')">Custom</button>
+        </div>
+        <div class="rep-nav-row" id="rep-nav-row">
+          <button class="sched-nav-btn" id="rep-prev" onclick="reportNav(-1)">&#8592;</button>
+          <span class="rep-range-label" id="rep-range-label">&mdash;</span>
+          <button class="sched-nav-btn" id="rep-next" onclick="reportNav(1)">&#8594;</button>
+        </div>
+        <div class="rep-custom" id="rep-custom-row" style="display:none;margin-top:0.6rem">
+          From <input type="date" id="rep-custom-start" onchange="reportCustomChange()">
+          to <input type="date" id="rep-custom-end" onchange="reportCustomChange()">
+        </div>
+        <label class="rep-compare">
+          <input type="checkbox" id="rep-compare-toggle" onchange="toggleReportCompare(this.checked)">
+          Compare to prior period
+        </label>
+      </div>
+      <div id="reports-body"><div class="loading">Loading&hellip;</div></div>
     </div>
   </div>
 
@@ -4748,7 +4806,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs'];
+const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','reports'];
 
 function switchTab(tab) {
   const allViews = ['overview','schedule','invoices', ...MORE_TABS];
@@ -4779,11 +4837,281 @@ function switchTab(tab) {
     if (!_currentDogId) renderDogsList();
     else renderDogPage();
   }
+  if (tab === 'reports') renderReports();
 }
 
 function toggleMoreMenu() {
   document.getElementById('more-dropdown').classList.toggle('open');
 }
+// ============================================================
+// REPORTS PAGE
+// Counts are derived in-memory from the already-loaded arrays.
+// Counting rules (kept consistent with import conventions):
+//  - "Boarding" stats EXCLUDE cancelled bookings and Village dog-pound stays;
+//    compassionate (no-charge) stays ARE included.
+//  - A stay occupies its kennel from check-in through check-out date inclusive
+//    (check-out date = the last night).
+//  - "Bookings" and per-customer "days" count one logical booking per
+//    booking_group_id (a multi-dog booking counts once).
+//  - "Days booked across all kennels" = distinct kennel-nights (shared kennels
+//    are not double-counted).
+// ============================================================
+let _repPeriod = 'month';
+let _repAnchor = todayStr();
+let _repCustomStart = null, _repCustomEnd = null;
+let _repCompare = false;
+
+function _rd(ds){ return new Date(ds + 'T12:00:00'); }
+function _rds(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function _rshift(ds,n){ const d=_rd(ds); d.setDate(d.getDate()+n); return _rds(d); }
+
+function setReportPeriod(type){
+  _repPeriod = type;
+  ['day','week','month','year','custom'].forEach(t=>{
+    const b=document.getElementById('rep-ptab-'+t); if(b) b.classList.toggle('active', t===type);
+  });
+  const isCustom = type==='custom';
+  document.getElementById('rep-custom-row').style.display = isCustom ? 'flex' : 'none';
+  document.getElementById('rep-nav-row').style.display    = isCustom ? 'none' : 'flex';
+  if (isCustom){
+    if (!_repCustomStart || !_repCustomEnd){
+      const d=_rd(todayStr());
+      _repCustomStart=_rds(new Date(d.getFullYear(),d.getMonth(),1));
+      _repCustomEnd=todayStr();
+    }
+    document.getElementById('rep-custom-start').value=_repCustomStart;
+    document.getElementById('rep-custom-end').value=_repCustomEnd;
+  } else {
+    _repAnchor = todayStr();
+  }
+  renderReports();
+}
+
+function reportNav(dir){
+  if (_repPeriod==='day')   _repAnchor=_rshift(_repAnchor, dir);
+  else if (_repPeriod==='week') _repAnchor=_rshift(_repAnchor, 7*dir);
+  else if (_repPeriod==='month'){ const d=_rd(_repAnchor); _repAnchor=_rds(new Date(d.getFullYear(),d.getMonth()+dir,1)); }
+  else if (_repPeriod==='year'){  const d=_rd(_repAnchor); _repAnchor=_rds(new Date(d.getFullYear()+dir,0,1)); }
+  else return;
+  renderReports();
+}
+
+function reportCustomChange(){
+  _repCustomStart=document.getElementById('rep-custom-start').value||null;
+  _repCustomEnd=document.getElementById('rep-custom-end').value||null;
+  renderReports();
+}
+
+function toggleReportCompare(checked){ _repCompare=checked; renderReports(); }
+
+function getReportRange(){
+  const a=_repAnchor;
+  if (_repPeriod==='day')  return {start:a, end:a};
+  if (_repPeriod==='week'){
+    const d=_rd(a); const dow=(d.getDay()+6)%7; // Monday=0
+    const start=_rshift(a,-dow); return {start, end:_rshift(start,6)};
+  }
+  if (_repPeriod==='month'){
+    const d=_rd(a);
+    return {start:_rds(new Date(d.getFullYear(),d.getMonth(),1)), end:_rds(new Date(d.getFullYear(),d.getMonth()+1,0))};
+  }
+  if (_repPeriod==='year'){
+    const y=_rd(a).getFullYear(); return {start:y+'-01-01', end:y+'-12-31'};
+  }
+  let s=_repCustomStart||todayStr(), e=_repCustomEnd||todayStr();
+  if (s>e){ const t=s; s=e; e=t; }
+  return {start:s, end:e};
+}
+
+function getPriorRange(start,end){
+  if (_repPeriod==='month'){
+    const d=_rd(start); const pm=new Date(d.getFullYear(),d.getMonth()-1,1);
+    return {start:_rds(pm), end:_rds(new Date(pm.getFullYear(),pm.getMonth()+1,0))};
+  }
+  if (_repPeriod==='year'){
+    const y=+start.slice(0,4)-1; return {start:y+'-01-01', end:y+'-12-31'};
+  }
+  const len=diffDays(start,end)+1;
+  return {start:_rshift(start,-len), end:_rshift(start,-1)};
+}
+
+function computeReportMetrics(start,end){
+  const grp = b => b.booking_group_id || b.id;
+  const inP = d => d && d>=start && d<=end;
+  const overlaps = b => b.check_in_date && b.check_out_date && b.check_in_date<=end && b.check_out_date>=start;
+  const periodDays = diffDays(start,end)+1;
+
+  const boarding = _bookings.filter(b => b.status!=='cancelled' && !b.dog_pound);
+  const boardingOverlap = boarding.filter(overlaps);
+
+  // Distinct kennel-nights
+  const knSet=new Set(), stdSet=new Set(), kennelCount={};
+  boardingOverlap.forEach(b=>{
+    let s = b.check_in_date>start ? b.check_in_date : start;
+    let e = b.check_out_date<end ? b.check_out_date : end;
+    for (let d=s; d<=e; d=_rshift(d,1)){
+      const key=b.kennel_number+'|'+d;
+      if (!knSet.has(key)){
+        knSet.add(key);
+        kennelCount[b.kennel_number]=(kennelCount[b.kennel_number]||0)+1;
+        if (b.kennel_number<=10) stdSet.add(key);
+      }
+    }
+  });
+
+  // Per-customer days (one dog per logical booking)
+  const seenGroup=new Set(), custDays={}, custBk={};
+  boardingOverlap.forEach(b=>{
+    const g=grp(b); if (seenGroup.has(g)) return; seenGroup.add(g);
+    const s=b.check_in_date>start?b.check_in_date:start;
+    const e=b.check_out_date<end?b.check_out_date:end;
+    const nights=diffDays(s,e)+1; if (nights<=0) return;
+    const hid=b.household_id||'__none';
+    custDays[hid]=(custDays[hid]||0)+nights;
+    custBk[hid]=(custBk[hid]||0)+1;
+  });
+  const hhName={}; _households.forEach(h=>hhName[h.id]=h.owner_name);
+  const topCustomers=Object.keys(custDays).map(hid=>({
+    name: hid==='__none'?'(no customer on file)':(hhName[hid]||'Unknown'),
+    days: custDays[hid], bookings: custBk[hid]
+  })).sort((a,b)=> b.days-a.days || b.bookings-a.bookings).slice(0,5);
+
+  // Avg full stay length for groups checking in this period
+  const stayGroups=new Set(); let staySum=0, stayN=0;
+  boarding.filter(b=>inP(b.check_in_date)).forEach(b=>{
+    const g=grp(b); if (stayGroups.has(g)) return; stayGroups.add(g);
+    const n=diffDays(b.check_in_date,b.check_out_date)+1; if (n>0){ staySum+=n; stayN++; }
+  });
+
+  // Busiest kennel
+  let busiest=null, busiestN=0;
+  Object.keys(kennelCount).forEach(k=>{ if (kennelCount[k]>busiestN){ busiestN=kennelCount[k]; busiest=k; } });
+
+  // Invoices raised in period
+  const invInP=_invoices.filter(iv=> inP(iv.invoice_date));
+
+  const bookingsCount = new Set(boardingOverlap.map(grp)).size;
+  const cleaningsDone = _cleanings.filter(c=> c.status==='completed' && inP(c.completed_date));
+
+  return {
+    periodDays,
+    dogs: boardingOverlap.length,
+    checkins: boarding.filter(b=>inP(b.check_in_date)).length,
+    checkouts: boarding.filter(b=>inP(b.check_out_date)).length,
+    bookings: bookingsCount,
+    cancellations: new Set(_bookings.filter(b=> b.status==='cancelled' && !b.dog_pound && inP(b.check_in_date)).map(grp)).size,
+    daysBooked: knSet.size,
+    occupancy: periodDays? (stdSet.size/(10*periodDays))*100 : 0,
+    cleanings: cleaningsDone.length,
+    cleaningsFull: cleaningsDone.filter(c=>c.type==='full').length,
+    cleaningsRefresh: cleaningsDone.filter(c=>c.type==='quick_refresh').length,
+    offsite: new Set(boardingOverlap.filter(b=>b.off_site_pickup).map(grp)).size,
+    avgStay: stayN? staySum/stayN : 0,
+    avgDogsPerBooking: bookingsCount? boardingOverlap.length/bookingsCount : 0,
+    newCustomers: _households.filter(h=> h.created_at && inP(h.created_at.slice(0,10))).length,
+    compassionate: new Set(boardingOverlap.filter(b=>b.compassionate_care).map(grp)).size,
+    poundStays: new Set(_bookings.filter(b=> b.dog_pound && b.status!=='cancelled' && overlaps(b)).map(grp)).size,
+    busiestLabel: busiest ? (busiest==='11'?'VIP':('Kennel '+busiest)) : '—',
+    busiestN,
+    invoices: invInP.length,
+    billedDays: invInP.reduce((s,iv)=>s+(iv.days_billed||0),0),
+    outWindow: invInP.filter(iv=>iv.outside_window_pickup).length,
+    outHours: invInP.filter(iv=>iv.outside_hours_dropoff).length,
+    offDelivery: invInP.filter(iv=>iv.off_site_delivery).length,
+    topCustomers
+  };
+}
+
+function repKpi(label, cur, prior, opts){
+  opts = opts || {};
+  const fmt = opts.fmt || (v=>v);
+  const sub = opts.sub ? `<div class="rep-kpi-sub">${opts.sub}</div>` : '';
+  let delta='';
+  if (_repCompare && prior!=null && cur!=null){
+    const d = cur - prior;
+    const r = Math.round(d*100)/100;
+    if (Math.abs(r) < 0.05){
+      delta='<div class="rep-delta flat">→ no change vs prior</div>';
+    } else {
+      const up=d>0, good = opts.invert ? !up : up;
+      const arrow = up?'▲':'▼';
+      let mag;
+      if (opts.unit==='pts') mag = Math.abs(r).toFixed(1)+' pts';
+      else if (opts.decimal) mag = Math.abs(r).toFixed(1);
+      else mag = Math.abs(Math.round(d));
+      const pct = (prior && !opts.unit) ? ` (${Math.round(Math.abs(d)/prior*100)}%)` : '';
+      delta=`<div class="rep-delta ${good?'up':'down'}">${arrow} ${mag}${pct} vs prior</div>`;
+    }
+  }
+  return `<div class="rep-kpi"><div class="rep-kpi-label">${label}</div><div class="rep-kpi-value">${fmt(cur)}</div>${sub}${delta}</div>`;
+}
+
+function renderReports(){
+  const body=document.getElementById('reports-body');
+  if (!body) return;
+  const {start,end}=getReportRange();
+
+  // Human range label
+  let rangeLabel;
+  if (_repPeriod==='day') rangeLabel=fmtDateY(start);
+  else if (_repPeriod==='month'){ const d=_rd(start); rangeLabel=`${MONTHS[d.getMonth()]} ${d.getFullYear()}`; }
+  else if (_repPeriod==='year') rangeLabel=start.slice(0,4);
+  else rangeLabel=`${fmtDate(start)} – ${fmtDateY(end)}`;
+  const rl=document.getElementById('rep-range-label'); if (rl) rl.textContent=rangeLabel;
+
+  const m=computeReportMetrics(start,end);
+  let p=null;
+  if (_repCompare){ const pr=getPriorRange(start,end); p=computeReportMetrics(pr.start,pr.end); }
+  const P=k=> p? p[k] : null;
+
+  const headline = [
+    repKpi('Dogs Boarded', m.dogs, P('dogs'), {sub:'dogs in care during period'}),
+    repKpi('Check-ins', m.checkins, P('checkins'), {sub:'arrivals in period'}),
+    repKpi('Check-outs', m.checkouts, P('checkouts'), {sub:'departures in period'}),
+    repKpi('Bookings', m.bookings, P('bookings'), {sub:'multi-dog stay = 1'}),
+    repKpi('Cancellations', m.cancellations, P('cancellations'), {sub:'by booking date', invert:true}),
+    repKpi('Days Booked', m.daysBooked, P('daysBooked'), {sub:'kennel-nights, all kennels'}),
+    repKpi('Cleanings', m.cleanings, P('cleanings'), {sub:`${m.cleaningsFull} full · ${m.cleaningsRefresh} refresh`}),
+    repKpi('Off-site Pickup / Dropoff', m.offsite, P('offsite'), {sub:'flagged bookings'}),
+    repKpi('Occupancy', m.occupancy, P('occupancy'), {fmt:v=>Math.round(v)+'%', sub:'kennels 1–10', unit:'pts'}),
+  ].join('');
+
+  const insights = [
+    repKpi('Avg Stay', m.avgStay, P('avgStay'), {fmt:v=>v? v.toFixed(1):'—', sub:'nights / booking', decimal:true}),
+    repKpi('Avg Dogs / Booking', m.avgDogsPerBooking, P('avgDogsPerBooking'), {fmt:v=>v? v.toFixed(1):'—', decimal:true}),
+    repKpi('New Customers', m.newCustomers, P('newCustomers'), {sub:'added in period'}),
+    repKpi('Compassionate Stays', m.compassionate, P('compassionate'), {sub:'no-charge (incl. above)'}),
+    repKpi('Busiest Kennel', m.busiestLabel, null, {fmt:v=>v, sub:`${m.busiestN} nights booked`}),
+    repKpi('Invoices Raised', m.invoices, P('invoices'), {sub:`${m.billedDays} billed days`}),
+    repKpi('Outside-hrs Drop-offs', m.outHours, P('outHours'), {sub:'billed surcharge'}),
+    repKpi('Outside-window Pickups', m.outWindow, P('outWindow'), {sub:'billed surcharge'}),
+    repKpi('Village Dog-pound Stays', m.poundStays, null, {sub:'excluded from totals'}),
+  ].join('');
+
+  let top;
+  if (!m.topCustomers.length){
+    top='<div class="empty">No bookings in this period.</div>';
+  } else {
+    top=m.topCustomers.map((c,i)=>
+      `<div class="rep-top-row">
+        <div class="rep-top-rank">${i+1}</div>
+        <div class="rep-top-name">${c.name}</div>
+        <div class="rep-top-val">${c.days} day${c.days===1?'':'s'} <span class="rep-top-sub">· ${c.bookings} booking${c.bookings===1?'':'s'}</span></div>
+      </div>`).join('');
+  }
+
+  body.innerHTML =
+    `<div class="rep-kpi-grid">${headline}</div>
+     <div class="rep-section-title">Top 5 Customers &mdash; booked days in period</div>
+     <div class="card" style="padding:0.5rem 1rem">${top}</div>
+     <div class="rep-section-title">Additional Insights</div>
+     <div class="rep-kpi-grid">${insights}</div>
+     <div style="font-size:0.72rem;color:#94a3b8;margin-top:1rem;line-height:1.5">
+       Boarding counts exclude cancelled bookings and Village dog-pound stays; compassionate (no-charge) stays are included.
+       A stay occupies its kennel from check-in through check-out (last night). "Days Booked" counts distinct kennel-nights, so dogs sharing a kennel are not double-counted.
+     </div>`;
+}
+
 
 // ============================================================
 // DATA BACKUP — pulls every table into one JSON file the user saves locally
