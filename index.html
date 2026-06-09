@@ -1530,56 +1530,81 @@ function invRowHtml(i) {
 }
 
 function renderInvoices(invoices, bookings) {
-  const pending    = invoices.filter(i => i.status === 'pending');
-  const sent       = invoices.filter(i => i.status === 'sent');
+  const pending     = invoices.filter(i => i.status === 'pending');
+  const sent        = invoices.filter(i => i.status === 'sent');
   const invoicedIds = invoices.map(i => i.booking_id);
   const needInvoice = bookings.filter(b => b.status === 'completed' && !invoicedIds.includes(b.id));
+  const ownerOf = hhId => {
+    const h = hhId ? (_households || []).find(x => x.id === hhId) : null;
+    return h ? h.owner_name : (hhId ? '(Unknown owner)' : 'Unassigned');
+  };
+  const dys = d => `${d} day${d !== 1 ? 's' : ''}`;
+  const subHdr = t => `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">${t}</div>`;
+  const none = '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
+  // Group rows by booking (household + booking_group_id) so a multi-dog booking is one
+  // row under the owner's name instead of one row per dog.
+  const groupBy = (arr, hhFn, grpFn) => {
+    const map = new Map();
+    arr.forEach(x => {
+      const hh = hhFn(x);
+      const k = (hh || '__none__') + '|' + grpFn(x);
+      if (!map.has(k)) map.set(k, { hh, items: [] });
+      map.get(k).items.push(x);
+    });
+    return [...map.values()];
+  };
 
   let html = '';
-
-  // Stage 1: Awaiting Invoice — always shown
-  const stage1 = [...needInvoice.map(b => ({_type:'booking', b})), ...pending.map(i => ({_type:'invoice', i}))];
-  html += `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">Awaiting Invoice</div>`;
-  if (stage1.length) {
-    stage1.forEach(item => {
-      if (item._type === 'booking') {
-        const b = item.b;
-        html += `<div class="inv-row">
-          <div style="flex:1;font-size:0.875rem;color:#64748b">${b.dog_name} K${b.kennel_number} <span style="font-size:0.75rem;color:#94a3b8">out ${fmtDate(b.check_out_date)}</span></div>
-          <button class="btn btn-sm btn-secondary" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Mark Invoiced</button>
-        </div>`;
-      } else {
-        const i = item.i;
-        html += `<div class="inv-row" style="cursor:pointer" onclick="openInvoiceDetail('${i.id}')"
-            onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
-          <input type="checkbox" class="inv-row-check" title="Mark invoiced" onclick="event.stopPropagation();markInvoiceSent('${i.id}')">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:0.875rem"><strong>${i.bookings?.dog_name||'?'}</strong> K${i.bookings?.kennel_number||'?'}</div>
-            <div style="font-size:0.75rem;color:#94a3b8">${i.days_billed} day${i.days_billed!==1?'s':''} · due ${fmtDate(i.invoice_date)}</div>
-          </div>
-        </div>`;
-      }
-    });
-  } else {
-    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
-  }
-
-  // Stage 2: Awaiting Payment — always shown
-  html += '<div style="height:0.5rem"></div>';
-  html += `<div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#94a3b8;margin-bottom:0.3rem">Awaiting Payment</div>`;
-  if (sent.length) {
-    sent.forEach(i => {
-      html += `<div class="inv-row" style="cursor:pointer" onclick="openInvoiceDetail('${i.id}')"
-          onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
-        <input type="checkbox" class="inv-row-check" title="Mark paid" onclick="event.stopPropagation();markInvoicePaid('${i.id}')">
+  // ── Awaiting Invoice ──
+  html += subHdr('Awaiting Invoice');
+  const niGroups   = groupBy(needInvoice, b => b.household_id, b => b.booking_group_id || ('s:' + b.id));
+  const pendGroups = groupBy(pending, i => i.bookings?.household_id, i => i.bookings?.booking_group_id || ('s:' + (i.booking_id || i.id)));
+  if (niGroups.length || pendGroups.length) {
+    niGroups.forEach(g => {
+      const dogs = g.items.map(b => b.dog_name).join(', ');
+      const kn = [...new Set(g.items.map(b => 'K' + b.kennel_number))].join(', ');
+      html += `<div class="inv-row">
         <div style="flex:1;min-width:0">
-          <div style="font-size:0.875rem"><strong>${i.bookings?.dog_name||'?'}</strong> K${i.bookings?.kennel_number||'?'} <span class="badge badge-blue" style="font-size:0.6rem">Sent</span></div>
-          <div style="font-size:0.75rem;color:#94a3b8">${i.days_billed} day${i.days_billed!==1?'s':''} · ${fmtDate(i.invoice_date)}</div>
+          <div style="font-size:0.875rem"><strong>${ownerOf(g.hh)}</strong></div>
+          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${kn} · out ${fmtDate(g.items[0].check_out_date)}</div>
+        </div>
+        <button class="btn btn-sm btn-secondary" onclick="openLogCheckout(${JSON.stringify(g.items[0]).split('"').join("'")})">Mark Invoiced</button>
+      </div>`;
+    });
+    pendGroups.forEach(g => {
+      const ids = g.items.map(i => i.id).join(',');
+      const dogs = g.items.map(i => i.bookings?.dog_name || '?').join(', ');
+      html += `<div class="inv-row" style="cursor:pointer" onclick="openInvoiceDetail('${g.items[0].id}')"
+          onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="inv-row-check" title="Mark invoiced" onclick="event.stopPropagation();markGroupSent('${ids}')">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.875rem"><strong>${ownerOf(g.hh)}</strong></div>
+          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${dys(g.items[0].days_billed)} · due ${fmtDate(g.items[0].invoice_date)}</div>
         </div>
       </div>`;
     });
   } else {
-    html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
+    html += none;
+  }
+
+  // ── Awaiting Payment ──
+  html += '<div style="height:0.5rem"></div>' + subHdr('Awaiting Payment');
+  const sentGroups = groupBy(sent, i => i.bookings?.household_id, i => i.bookings?.booking_group_id || ('s:' + (i.booking_id || i.id)));
+  if (sentGroups.length) {
+    sentGroups.forEach(g => {
+      const ids = g.items.map(i => i.id).join(',');
+      const dogs = g.items.map(i => i.bookings?.dog_name || '?').join(', ');
+      html += `<div class="inv-row" style="cursor:pointer" onclick="openInvoiceDetail('${g.items[0].id}')"
+          onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+        <input type="checkbox" class="inv-row-check" title="Mark paid" onclick="event.stopPropagation();markGroupPaid('${ids}')">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.875rem"><strong>${ownerOf(g.hh)}</strong> <span class="badge badge-blue" style="font-size:0.6rem">Sent</span></div>
+          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${dys(g.items[0].days_billed)} · ${fmtDate(g.items[0].invoice_date)}</div>
+        </div>
+      </div>`;
+    });
+  } else {
+    html += none;
   }
 
   document.getElementById('invoices-body').innerHTML = html;
@@ -4685,6 +4710,21 @@ async function markInvoicePaid(id) {
   const { error } = await db.from('invoices').update({ status: 'paid', paid_date: todayStr() }).eq('id', id);
   if (error) { showToast('Error', 'error'); return; }
   showToast('Invoice marked paid');
+  await loadAll();
+}
+
+async function markGroupSent(ids) {
+  const arr = String(ids).split(',').filter(Boolean);
+  const { error } = await db.from('invoices').update({ status: 'sent' }).in('id', arr);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast(arr.length > 1 ? 'Invoices marked sent' : 'Invoice marked sent');
+  await loadAll();
+}
+async function markGroupPaid(ids) {
+  const arr = String(ids).split(',').filter(Boolean);
+  const { error } = await db.from('invoices').update({ status: 'paid', paid_date: todayStr() }).in('id', arr);
+  if (error) { showToast('Error', 'error'); return; }
+  showToast(arr.length > 1 ? 'Invoices marked paid' : 'Invoice marked paid');
   await loadAll();
 }
 
