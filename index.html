@@ -935,12 +935,57 @@ async function loadAll() {
   _noteCategories = rNoteCats.data || [];
   _invoiceItems = rInvItems.data || [];
 
+  // Keep cancelled bookings visible: if a real booking now overlaps a cancellation in
+  // the same kennel, move the cancellation to a spare kennel so both still render.
+  await relocateConflictedCancellations();
+
   // Auto-schedule pending cleanings: earliest date possible, max 1/day, prioritized
   // by each kennel's next check-in. Cleanings that must happen before an imminent
   // check-in get a transient `must_complete` flag picked up by renders.
   await autoScheduleCleanings();
 
   renderAll();
+}
+
+// Cancellations are kept on the calendar for visibility. If a non-cancelled booking
+// overlaps a cancelled one in the same kennel (e.g. the slot was rebooked / a booking
+// was moved on top of it), relocate the cancellation to a spare kennel: VIP (11) first,
+// then any blocked kennel, then any free kennel. Dogs of the same cancelled booking may
+// share a kennel; different cancellations are not stacked. Kennel doesn't matter for a
+// cancellation (reporting only) — this is purely so every booking stays visible.
+async function relocateConflictedCancellations() {
+  const cancelled = _bookings.filter(b => b.status === 'cancelled' && b.check_in_date && b.check_out_date);
+  if (!cancelled.length) return;
+  const occupied = _bookings.filter(b => (b.status === 'active' || b.status === 'pending' || b.status === 'completed') && b.check_in_date && b.check_out_date);
+  const ov = (a1, a2, b1, b2) => a1 <= b2 && a2 >= b1;
+  const blocked = (_kennels || []).filter(k => k.blocked_off && k.kennel_number !== 11).map(k => k.kennel_number);
+  const rest = [1,2,3,4,5,6,7,8,9,10].filter(k => !blocked.includes(k));
+  const order = [11, ...blocked, ...rest];
+  const updates = [];
+  for (const c of cancelled) {
+    const conflict = occupied.some(o => o.kennel_number === c.kennel_number && ov(c.check_in_date, c.check_out_date, o.check_in_date, o.check_out_date));
+    if (!conflict) continue;
+    let target = null;
+    for (const k of order) {
+      if (k === c.kennel_number) continue;
+      if (occupied.some(o => o.kennel_number === k && ov(c.check_in_date, c.check_out_date, o.check_in_date, o.check_out_date))) continue;
+      const clash = cancelled.some(c2 => {
+        if (c2 === c || c2.kennel_number !== k) return false;
+        const sameBooking = c.booking_group_id && c2.booking_group_id === c.booking_group_id;
+        return !sameBooking && ov(c.check_in_date, c.check_out_date, c2.check_in_date, c2.check_out_date);
+      });
+      if (clash) continue;
+      target = k; break;
+    }
+    if (target == null) target = 11;
+    if (target !== c.kennel_number) {
+      c.kennel_number = target;       // mutate so later checks + render use it
+      updates.push({ id: c.id, kennel_number: target });
+    }
+  }
+  for (const u of updates) {
+    try { await db.from('bookings').update({ kennel_number: u.kennel_number }).eq('id', u.id); } catch (e) {}
+  }
 }
 
 // ============================================================
