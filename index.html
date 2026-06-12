@@ -3100,6 +3100,7 @@ function ownerPickerInit(id, opts = {}) {
     const q = input.value.trim().toLowerCase();
     const matches = (_households || [])
       .filter(h => !excludeIds.has(h.id))
+      .filter(h => !h.archived)
       .filter(h => !q || (h.owner_name || '').toLowerCase().includes(q))
       .sort((a, b) => a.owner_name.localeCompare(b.owner_name));
     const exact = q && matches.find(h => (h.owner_name || '').toLowerCase() === q);
@@ -3213,7 +3214,7 @@ function abInitDogPicker(row) {
   function render() {
     const q = input.value.trim().toLowerCase();
     const hhId = getHouseholdId();
-    let dogs = (_dogs || []).filter(d => d.household_id === hhId);
+    let dogs = (_dogs || []).filter(d => d.household_id === hhId && !d.archived);
     if (q) dogs = dogs.filter(d => (d.name || '').toLowerCase().includes(q));
     dogs.sort((a, b) => a.name.localeCompare(b.name));
     const exact = q && dogs.find(d => (d.name || '').toLowerCase() === q);
@@ -3938,9 +3939,16 @@ function renderCustomers() {
     dogsByHh[d.household_id].push(d);
   });
   const td = todayStr();
-  let html = '<div style="display:flex;flex-direction:column;gap:0.75rem">';
-  for (const h of _households) {
-    const dogs = dogsByHh[h.id] || [];
+  const archivedCount = _households.filter(h => h.archived).length;
+  const visible = _households.filter(h => _showArchivedCust ? true : !h.archived);
+
+  let html = '';
+  if (archivedCount) {
+    html += `<div style="margin-bottom:0.5rem"><button class="btn btn-sm btn-secondary" onclick="toggleArchivedCust()">${_showArchivedCust ? 'Hide' : 'Show'} archived (${archivedCount})</button></div>`;
+  }
+  html += '<div style="display:flex;flex-direction:column;gap:0.75rem">';
+  for (const h of visible) {
+    const dogs = (dogsByHh[h.id] || []).filter(d => _showArchivedCust ? true : !d.archived);
     const dogHtml = dogs.length
       ? dogs.map(d => {
           const due = d.vaccination_due_date;
@@ -3950,7 +3958,9 @@ function renderCustomers() {
             : overdue ? `<span class="badge badge-red" style="margin-left:0.4rem">Vax overdue ${fmtDate(due)}</span>`
             : soon    ? `<span class="badge badge-yellow" style="margin-left:0.4rem">Vax due ${fmtDate(due)}</span>`
                       : `<span class="badge badge-green" style="margin-left:0.4rem">Vax ${fmtDate(due)}</span>`;
-          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">🐾 <a style="color:#1d4ed8;font-weight:600;cursor:pointer;text-decoration:none" onclick="openDogPage('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">${d.name}</a>${dueBadge}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
+          const archTag = d.archived ? '<span class="badge badge-gray" style="margin-left:0.4rem;font-size:0.6rem">archived</span>' : '';
+          const mergeLink = `<a style="margin-left:0.45rem;font-size:0.72rem;color:#7c3aed;cursor:pointer;text-decoration:none" title="Merge this dog into another record" onclick="event.stopPropagation();openMergeDog('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">merge</a>`;
+          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">🐾 <a style="color:#1d4ed8;font-weight:600;cursor:pointer;text-decoration:none" onclick="openDogPage('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">${d.name}</a>${dueBadge}${archTag}${mergeLink}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
         }).join('')
       : '<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.15rem">No dogs on file</div>';
 
@@ -3964,11 +3974,12 @@ function renderCustomers() {
     const notesHtml = h.notes
       ? `<div style="font-size:0.78rem;color:#64748b;margin-top:0.2rem;font-style:italic">${h.notes}</div>`
       : '';
+    const archBadge = h.archived ? '<span class="badge badge-gray" style="margin-left:0.4rem;font-size:0.65rem">Archived</span>' : '';
 
-    html += `<div class="card" style="padding:0.75rem 1rem">
+    html += `<div class="card" style="padding:0.75rem 1rem${h.archived ? ';opacity:0.6' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:0.95rem">${h.owner_name}</div>
+          <div style="font-weight:600;font-size:0.95rem">${h.owner_name}${archBadge}</div>
           ${metaHtml}
           ${notesHtml}
           <div style="margin-top:0.4rem">${dogHtml}</div>
@@ -3976,6 +3987,9 @@ function renderCustomers() {
         <div style="display:flex;flex-direction:column;gap:0.3rem">
           <button class="btn btn-sm btn-secondary" onclick="openEditCustomer('${h.id}')">Edit</button>
           <button class="btn btn-sm btn-secondary" onclick="openMergeCustomer('${h.id}')" title="Merge this customer into another">Merge…</button>
+          ${h.archived
+            ? `<button class="btn btn-sm btn-secondary" onclick="archiveCustomer('${h.id}', false)">Unarchive</button>`
+            : `<button class="btn btn-sm btn-secondary" onclick="archiveCustomer('${h.id}', true)" title="Hide from the active list">Archive</button>`}
         </div>
       </div>
     </div>`;
@@ -4002,15 +4016,20 @@ async function openDogPage(dogId) {
 
 function renderDogsList() {
   const body = document.getElementById('dogs-page-body');
-  const dogs = [..._dogs].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  if (!dogs.length) {
+  const all = [..._dogs].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (!all.length) {
     body.innerHTML = '<div class="card"><div class="card-body"><div class="empty">No dogs on file yet. Add one from the Customers page.</div></div></div>';
     return;
   }
+  const archivedCount = all.filter(d => d.archived).length;
+  const dogs = all.filter(d => _showArchivedDogs ? true : !d.archived);
   let html = `<div class="card">
     <div class="card-header"><h2>Dogs</h2><span class="badge badge-gray">${dogs.length}</span></div>
-    <div class="card-body">
-      <div style="display:flex;flex-direction:column;gap:0.4rem">`;
+    <div class="card-body">`;
+  if (archivedCount) {
+    html += `<div style="margin-bottom:0.5rem"><button class="btn btn-sm btn-secondary" onclick="toggleArchivedDogs()">${_showArchivedDogs ? 'Hide' : 'Show'} archived (${archivedCount})</button></div>`;
+  }
+  html += `<div style="display:flex;flex-direction:column;gap:0.4rem">`;
   const td = todayStr();
   dogs.forEach(d => {
     const h   = (_households || []).find(x => x.id === d.household_id);
@@ -4022,14 +4041,18 @@ function renderDogsList() {
       : overdue ? `<span class="badge badge-red" style="font-size:0.65rem">Vax overdue ${fmtDate(due)}</span>`
       : soon    ? `<span class="badge badge-yellow" style="font-size:0.65rem">Vax due ${fmtDate(due)}</span>`
                 : `<span class="badge badge-green" style="font-size:0.65rem">Vax ${fmtDate(due)}</span>`;
-    html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;background:white"
-                onclick="openDogPage('${d.id}')"
-                onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
-      <div style="flex:1;min-width:0">
+    const archBadge = d.archived ? '<span class="badge badge-gray" style="font-size:0.65rem">Archived</span>' : '';
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.5rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;background:white${d.archived ? ';opacity:0.6' : ''}">
+      <div style="flex:1;min-width:0;cursor:pointer" onclick="openDogPage('${d.id}')"
+           onmouseenter="this.parentElement.style.background='#f8fafc'" onmouseleave="this.parentElement.style.background='white'">
         <div style="font-weight:600;font-size:0.95rem">🐾 ${d.name}</div>
         <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner}</div>
       </div>
-      ${dueBadge}
+      ${dueBadge}${archBadge}
+      <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openMergeDog('${d.id}')" title="Merge this dog into another record">Merge…</button>
+      ${d.archived
+        ? `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();archiveDog('${d.id}', false)">Unarchive</button>`
+        : `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();archiveDog('${d.id}', true)" title="Hide from the active list">Archive</button>`}
     </div>`;
   });
   html += '</div></div></div>';
@@ -4083,8 +4106,10 @@ async function renderDogPage() {
   const STAFF_TAG  = '<span class="badge badge-gray" style="font-size:0.6rem;margin-left:0.3rem" title="Internal only — not exposed to the customer portal">staff only</span>';
 
   let html = `
-    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem">
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap">
       <button class="btn btn-sm btn-secondary" onclick="_currentDogId=null; renderDogsList()">← All dogs</button>
+      <button class="btn btn-sm btn-secondary" onclick="openMergeDog('${dog.id}')" title="Merge this dog into another record">⤵ Merge…</button>
+      <button class="btn btn-sm btn-secondary" onclick="archiveDog('${dog.id}', ${dog.archived ? 'false' : 'true'})">${dog.archived ? 'Unarchive' : 'Archive'}</button>
       <span style="flex:1"></span>
       <button class="btn btn-sm btn-secondary" onclick="dogNav(-1)" ${hasPrev?'':'disabled'} title="Previous dog (same owner)">← Prev</button>
       <button class="btn btn-sm btn-secondary" onclick="dogNav(1)"  ${hasNext?'':'disabled'} title="Next dog (same owner)">Next →</button>
@@ -4583,6 +4608,197 @@ function openMergeCustomer(sourceId) {
          and consolidate <strong>${dupCount}</strong> duplicate${dupCount === 1 ? '' : 's'} into <strong>${existing.owner_name}</strong>.`;
     },
   });
+}
+
+// ============================================================
+// MERGE DOG + ARCHIVE HELPERS
+// ============================================================
+let _showArchivedCust = false;
+let _showArchivedDogs = false;
+function toggleArchivedCust(){ _showArchivedCust = !_showArchivedCust; renderCustomers(); }
+function toggleArchivedDogs(){ _showArchivedDogs = !_showArchivedDogs; renderDogsList(); }
+
+async function archiveCustomer(id, on){
+  const { error } = await db.from('households').update({ archived: on }).eq('id', id);
+  if (error){ showToast(error.message, 'error'); return; }
+  const h = _households.find(x => x.id === id); if (h) h.archived = on;
+  showToast(on ? 'Customer archived' : 'Customer restored');
+  renderCustomers();
+}
+
+async function archiveDog(id, on){
+  const { error } = await db.from('dogs').update({ archived: on }).eq('id', id);
+  if (error){ showToast(error.message, 'error'); return; }
+  const d = _dogs.find(x => x.id === id); if (d) d.archived = on;
+  showToast(on ? 'Dog archived' : 'Dog restored');
+  if (_currentDogId === id) { if (on) { _currentDogId = null; renderDogsList(); } else { renderDogPage(); } }
+  else { renderDogsList(); }
+  renderCustomers();
+}
+
+const MERGE_DOG_FIELDS = [
+  {key:'name', label:'Name'},
+  {key:'household_id', label:'Owner', owner:true},
+  {key:'vaccination_due_date', label:'Vaccination due'},
+  {key:'vaccination_status', label:'Vaccination status'},
+  {key:'vaccination_notes', label:'Vaccination notes'},
+  {key:'feeding_instructions', label:'Feeding instructions'},
+  {key:'medication_instructions', label:'Medication instructions'},
+  {key:'internal_notes', label:'Internal notes'},
+];
+
+function _mdDisplay(f, val){
+  if (val === null || val === undefined || val === '') return '<em style="color:#94a3b8">(empty)</em>';
+  if (f.owner){ const h = _households.find(x => x.id === val); return h ? h.owner_name : '(unknown owner)'; }
+  return String(val).replace(/</g,'&lt;');
+}
+
+function dogPickerHTML(id){
+  return `
+    <div class="dog-picker" data-id="${id}" style="position:relative">
+      <input type="text" id="${id}-input" class="dog-picker-input" autocomplete="off" placeholder="Type a dog's name to search">
+      <input type="hidden" id="${id}-id" value="">
+      <div id="${id}-dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #cbd5e1;border-radius:6px;max-height:240px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
+    </div>`;
+}
+
+function dogPickerInit(id, opts = {}){
+  const input = document.getElementById(`${id}-input`);
+  const hidden = document.getElementById(`${id}-id`);
+  const dropdown = document.getElementById(`${id}-dropdown`);
+  if (!input || !hidden || !dropdown) return;
+  const excludeIds = new Set(opts.excludeIds || []);
+  function render(){
+    const q = input.value.trim().toLowerCase();
+    const matches = (_dogs || [])
+      .filter(d => !excludeIds.has(d.id))
+      .filter(d => !q || (d.name || '').toLowerCase().includes(q))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    let html = '';
+    if (!matches.length){
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">No matching dogs</div>`;
+    } else {
+      matches.slice(0, 30).forEach(d => {
+        const h = _households.find(x => x.id === d.household_id);
+        const owner = h ? `<span style="color:#94a3b8;margin-left:0.5rem;font-size:0.78rem">${h.owner_name}</span>` : '';
+        const arch = d.archived ? '<span class="badge badge-gray" style="font-size:0.6rem;margin-left:0.3rem">archived</span>' : '';
+        html += `<div class="dgp-match" data-id="${d.id}" data-name="${(d.name||'').replace(/"/g,'&quot;')}"
+                   style="padding:0.5rem 0.75rem;cursor:pointer;border-bottom:1px solid #f1f5f9">${d.name}${owner}${arch}</div>`;
+      });
+    }
+    dropdown.innerHTML = html;
+    dropdown.style.display = '';
+  }
+  input.addEventListener('focus', render);
+  input.addEventListener('input', () => { hidden.value = ''; render(); });
+  input.addEventListener('blur', () => { setTimeout(() => { dropdown.style.display = 'none'; }, 180); });
+  dropdown.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const m = e.target.closest('.dgp-match');
+    if (m){
+      hidden.value = m.dataset.id;
+      input.value = m.dataset.name;
+      dropdown.style.display = 'none';
+      if (opts.onSelect){ const d = _dogs.find(x => x.id === m.dataset.id); if (d) opts.onSelect(d); }
+    }
+  });
+}
+
+function renderMergeDogFields(src, tgt){
+  const cont = document.getElementById('mergedog-fields');
+  if (!cont) return;
+  let html = `<div style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.6rem 0 0.4rem">Choose what to keep</div>
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:0.5rem">Keeping <strong>${tgt.name}</strong>. Where the two records differ, pick which value to keep.</div>`;
+  let rows = 0;
+  MERGE_DOG_FIELDS.forEach(f => {
+    const sv = src[f.key], tv = tgt[f.key];
+    const sEmpty = sv === null || sv === undefined || sv === '';
+    const tEmpty = tv === null || tv === undefined || tv === '';
+    if (String(sv ?? '') === String(tv ?? '')) return;
+    if (sEmpty && tEmpty) return;
+    rows++;
+    if (sEmpty || tEmpty){
+      const val = tEmpty ? sv : tv;
+      const from = tEmpty ? 'merged record' : 'kept record';
+      html += `<div style="padding:0.4rem 0;border-bottom:1px solid #f1f5f9;font-size:0.82rem">
+        <div style="font-weight:600;color:#334155">${f.label}</div>
+        <div style="color:#475569">${_mdDisplay(f, val)} <span style="color:#94a3b8;font-size:0.72rem">(from ${from})</span></div>
+      </div>`;
+      return;
+    }
+    html += `<div style="padding:0.4rem 0;border-bottom:1px solid #f1f5f9;font-size:0.82rem">
+      <div style="font-weight:600;color:#334155;margin-bottom:0.2rem">${f.label}</div>
+      <label style="display:block;cursor:pointer;margin-bottom:0.15rem">
+        <input type="radio" name="mf-${f.key}" value="tgt" checked> Keep: ${_mdDisplay(f, tv)}
+      </label>
+      <label style="display:block;cursor:pointer">
+        <input type="radio" name="mf-${f.key}" value="src"> Use from merged: ${_mdDisplay(f, sv)}
+      </label>
+    </div>`;
+  });
+  if (!rows){
+    html += `<div style="font-size:0.8rem;color:#16a34a;padding:0.4rem 0">No conflicting details — the records combine cleanly.</div>`;
+  }
+  cont.innerHTML = html;
+}
+
+function openMergeDog(sourceId){
+  const src = _dogs.find(d => d.id === sourceId);
+  if (!src) return;
+  const srcOwner = _households.find(h => h.id === src.household_id);
+  const srcBookings = _bookings.filter(b => b.dog_id === sourceId).length;
+
+  const body = `
+    <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:6px;padding:0.6rem 0.8rem;margin-bottom:0.75rem;font-size:0.85rem;color:#5b21b6">
+      Merging <strong>${src.name}</strong>${srcOwner ? ` (${srcOwner.owner_name})` : ''}.
+      Pick the record to <strong>keep</strong> — the other is merged into it and then removed. No bookings or vaccination records are lost.
+      ${srcBookings ? `<div style="margin-top:0.25rem;font-size:0.78rem">${srcBookings} booking${srcBookings===1?'':'s'} will move to the kept record.</div>` : ''}
+    </div>
+    <div class="form-field"><label>Keep this record *</label>
+      ${dogPickerHTML('mergedog-target')}
+    </div>
+    <div id="mergedog-fields" style="margin-top:0.5rem"></div>`;
+
+  openModal('Merge dog: ' + src.name, body, async () => {
+    const targetId = document.getElementById('mergedog-target-id').value;
+    if (!targetId) throw new Error('Pick the record to keep');
+    if (targetId === sourceId) throw new Error('Pick a different record to keep');
+    const tgt = _dogs.find(d => d.id === targetId);
+    if (!tgt) throw new Error('Kept record not found');
+
+    const update = {};
+    MERGE_DOG_FIELDS.forEach(f => {
+      const sel = document.querySelector(`input[name="mf-${f.key}"]:checked`);
+      let val;
+      if (sel){ val = sel.value === 'src' ? src[f.key] : tgt[f.key]; }
+      else { val = (tgt[f.key] !== null && tgt[f.key] !== undefined && tgt[f.key] !== '') ? tgt[f.key] : src[f.key]; }
+      update[f.key] = (val === undefined || val === '') ? null : val;
+    });
+    if (!update.name) update.name = tgt.name || src.name;
+    if (!update.household_id) update.household_id = tgt.household_id || src.household_id;
+
+    if (!confirm(`Keep "${tgt.name}" and merge "${src.name}" into it? The "${src.name}" duplicate will be removed.`)) return;
+
+    const { error: upErr } = await db.from('dogs').update(update).eq('id', targetId);
+    if (upErr) throw upErr;
+    const { data, error } = await db.rpc('merge_dogs', { p_source: sourceId, p_target: targetId });
+    if (error) throw error;
+
+    closeModal();
+    const r = data || {};
+    showToast(`Merged · ${r.moved_bookings || 0} booking(s), ${r.moved_vacc || 0} vax record(s) moved`);
+    if (_currentDogId === sourceId) _currentDogId = targetId;
+    await loadAll();
+    if (_currentDogId) renderDogPage(); else renderDogsList();
+    renderCustomers();
+  }, 'Merge');
+
+  dogPickerInit('mergedog-target', {
+    excludeIds: [sourceId],
+    onSelect: (tgt) => renderMergeDogFields(src, tgt),
+  });
+  const ti = document.getElementById('mergedog-target-input');
+  if (ti) ti.value = src.name || '';
 }
 
 // ============================================================
