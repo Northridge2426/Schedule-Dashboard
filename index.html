@@ -3228,9 +3228,24 @@ function abInitDogPicker(row) {
                </div>`;
     }
     dogs.slice(0, 20).forEach(d => {
-      const dueLabel = d.vaccination_due_date
-        ? `<span style="color:#94a3b8;margin-left:0.5rem;font-size:0.78rem">Vax ${fmtDate(d.vaccination_due_date)}</span>`
-        : '';
+      let dueLabel = '';
+      if (d.vaccination_due_date) {
+        const vdue = d.vaccination_due_date;          // expiration date (YYYY-MM-DD)
+        const okNow = vdue >= todayStr();              // still valid as of today?
+        const nowIcon = okNow
+          ? '<span style="color:#16a34a;font-weight:700" title="Vaccination valid as of today">&#10003;</span>'
+          : '<span style="color:#dc2626;font-weight:700" title="Vaccination EXPIRED as of today">&#10007;</span>';
+        // Once a check-out date is entered, also flag whether it stays valid for the whole booking.
+        const coutEl = document.getElementById('f-cout-date');
+        const cout = coutEl ? coutEl.value : '';
+        let stayIcon = '';
+        if (cout) {
+          stayIcon = (vdue >= cout)
+            ? ' <span style="color:#16a34a;font-weight:600;font-size:0.72rem" title="Valid through the whole booking">&#10003; stay</span>'
+            : ' <span style="color:#dc2626;font-weight:600;font-size:0.72rem" title="Expires before this booking ends">&#10007; stay</span>';
+        }
+        dueLabel = `<span style="color:#64748b;margin-left:0.5rem;font-size:0.78rem">Vax ${fmtDateY(vdue)} ${nowIcon}${stayIcon}</span>`;
+      }
       html += `<div class="dp-match" data-id="${d.id}" data-name="${(d.name||'').replace(/"/g,'&quot;')}"
                   style="padding:0.5rem 0.75rem;cursor:pointer;border-bottom:1px solid #f1f5f9">
                   ${d.name}${dueLabel}
