@@ -3189,6 +3189,7 @@ function abDogRow(idx, defaultKennel = null) {
         <input type="hidden" class="ab-dog-id">
         <div class="ab-dog-dropdown"
              style="display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #cbd5e1;border-radius:6px;max-height:240px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
+        <div class="ab-vax-warn" style="display:none;color:#dc2626;font-size:0.72rem;font-weight:600;margin-top:0.2rem"></div>
       </div>
       <div class="form-field"><label>Kennel ${idx === 0 ? '*' : ''}</label>
         <div style="display:flex;gap:0.3rem;align-items:flex-start">
@@ -3199,6 +3200,37 @@ function abDogRow(idx, defaultKennel = null) {
         </div>
       </div>
     </div>`;
+}
+
+// Turns a booking dog field red when the picked dog's vaccination is expired as of
+// today, or expires before this booking's check-out date. Called on dog selection
+// and whenever the check-in/check-out dates change.
+function abValidateVax() {
+  const td = todayStr();
+  const coutEl = document.getElementById('f-cout-date');
+  const cout = coutEl ? coutEl.value : '';
+  document.querySelectorAll('.ab-dog-row').forEach(row => {
+    const hidden = row.querySelector('.ab-dog-id');
+    const input  = row.querySelector('.ab-dog-name');
+    const warnEl = row.querySelector('.ab-vax-warn');
+    let bad = false, msg = '';
+    if (hidden && hidden.value) {
+      const dog  = (_dogs || []).find(d => d.id === hidden.value);
+      const vdue = dog && dog.vaccination_due_date;
+      if (vdue) {
+        if (vdue < td) { bad = true; msg = '⚠ Vaccination expired ' + fmtDateY(vdue); }
+        else if (cout && vdue < cout) { bad = true; msg = '⚠ Vaccination expires ' + fmtDateY(vdue) + ', before this booking ends'; }
+      }
+    }
+    if (input) {
+      input.style.borderColor = bad ? '#dc2626' : '';
+      input.style.background  = bad ? '#fef2f2' : '';
+    }
+    if (warnEl) {
+      warnEl.textContent   = bad ? msg : '';
+      warnEl.style.display  = bad ? '' : 'none';
+    }
+  });
 }
 
 function abInitDogPicker(row) {
@@ -3259,7 +3291,7 @@ function abInitDogPicker(row) {
   }
 
   input.addEventListener('focus', render);
-  input.addEventListener('input', () => { hidden.value = ''; render(); });
+  input.addEventListener('input', () => { hidden.value = ''; render(); abValidateVax(); });
   input.addEventListener('blur', () => {
     setTimeout(() => { dropdown.style.display = 'none'; }, 180);
   });
@@ -3271,6 +3303,7 @@ function abInitDogPicker(row) {
       hidden.value = m.dataset.id;
       input.value  = m.dataset.name;
       dropdown.style.display = 'none';
+      abValidateVax();
     } else if (a) {
       hidden.value = '';
       dropdown.style.display = 'none';
@@ -3469,6 +3502,11 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     if (sel) sel.value = String(defaultKennel);
   }
   ownerPickerInit('ab-owner', { allowEmpty: true });
+  // Live vaccination check: re-validate dog fields whenever the booking dates change.
+  ['f-cin-date','f-cout-date'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', abValidateVax);
+  });
 }
 
 // ============================================================
