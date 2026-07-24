@@ -1280,9 +1280,15 @@ function renderKennels(bookings, cleanings, kennels) {
     const isActive        = !!activeByKennel[k];
     const isCheckoutToday = isActive && activeByKennel[k].some(b => b.check_out_date === td);
 
-    // Only the NEXT (earliest) pending booking for this kennel
+    // Only the NEXT (earliest) pending booking for this kennel. Ignore stale/corrupt
+    // rows (checkout before checkin, or a stay entirely in the past) so a leftover
+    // bad booking can never surface as the kennel's displayed dog.
     const nextPending = pendingByKennel[k]
-      ? [...pendingByKennel[k]].sort((a,b) => a.check_in_date.localeCompare(b.check_in_date))[0]
+      ? ([...pendingByKennel[k]]
+          .filter(b => b.check_in_date && b.check_out_date
+                    && b.check_out_date >= b.check_in_date
+                    && b.check_out_date >= td)
+          .sort((a,b) => a.check_in_date.localeCompare(b.check_in_date))[0] || null)
       : null;
     const upcoming7 = nextPending ? nextPending.check_in_date <= in7Str : false;
 
@@ -2197,11 +2203,14 @@ function openBookingChooser(bookingId) {
   const titleSuffix = group.length > 1
     ? ` — ${group.map(g => g.dog_name).join(' + ')}`
     : ` — ${b.dog_name}`;
+  const dangerHTML = `<button class="btn btn-secondary" onclick="deleteBooking('${b.id}')" style="padding:0.75rem;text-align:left;color:#b91c1c;border-color:#fecaca">🗑 Delete booking${group.length > 1 ? ' (all ' + group.length + ' dogs)' : ''}<span style="display:block;font-size:0.7rem;font-weight:400;color:#94a3b8;margin-top:0.15rem">Entered in error — removes it entirely (not a cancellation)</span></button>`;
+
   const body = `<div style="display:flex;flex-direction:column;gap:0.5rem">
     ${primaryHTML}
     ${editHTML}
     ${dogsHTML}
     ${ownerHTML}
+    ${dangerHTML}
   </div>`;
 
   openModal('K' + k + titleSuffix, body, null);
@@ -2313,7 +2322,7 @@ function openLogCheckout(booking) {
   const inv = (_invoices || []).find(x => x.booking_id === b.id) || null;
 
   // Group cascade notice (multi-dog booking)
-  const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id) : [b];
+  const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled') : [b];
   const groupNotice = group.length > 1
     ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
          <strong>Group booking</strong> — dates apply to all ${group.length} dogs. Each dog's kennel can be changed independently below.
@@ -2364,6 +2373,8 @@ function openLogCheckout(booking) {
   const cancelBtn = !isCompleted
     ? `<button class="btn btn-danger" id="mb-cancel-btn" onclick="cancelBooking('${b.id}')" style="margin-right:auto">Cancel Booking</button>`
     : '';
+  // Delete (entered-in-error) — permanent, distinct from Cancel. Available for any status.
+  const deleteBtn = `<button class="btn btn-secondary" id="mb-delete-btn" onclick="deleteBooking('${b.id}')" title="Permanently delete a booking entered in error (not a cancellation)" style="color:#b91c1c;border-color:#fecaca">🗑 Delete</button>`;
   // Transfer to a different kennel mid-stay (active/pending only). Completed days
   // stay on the current kennel; the rest move to the new one.
   const transferBtn = !isCompleted
@@ -2371,6 +2382,7 @@ function openLogCheckout(booking) {
     : '';
   document.getElementById('modal-footer').innerHTML = `
     ${cancelBtn}
+    ${deleteBtn}
     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     ${transferBtn}
     <button class="btn btn-primary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save changes</button>
@@ -2388,7 +2400,7 @@ async function manageBookingSave(bookingId) {
 
     const b = _bookings.find(x => x.id === bookingId);
     const group = b && b.booking_group_id
-      ? _bookings.filter(x => x.booking_group_id === b.booking_group_id)
+      ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled')
       : (b ? [b] : []);
 
     // Read per-dog kennel edits from the modal
@@ -2432,7 +2444,8 @@ async function manageBookingSave(bookingId) {
     };
     let upd = db.from('bookings').update(updates);
     if (b && b.booking_group_id) {
-      upd = upd.eq('booking_group_id', b.booking_group_id);
+      // Cascade to live group members only — never overwrite cancelled stub rows.
+      upd = upd.eq('booking_group_id', b.booking_group_id).neq('status', 'cancelled');
     } else {
       upd = upd.eq('id', bookingId);
     }
@@ -2491,7 +2504,7 @@ async function manageBookingSave(bookingId) {
       const compEl = document.getElementById('f-compassionate');
       const dpEl = document.getElementById('f-dogpound');
       let pickupUpd = db.from('bookings').update({ off_site_pickup: pickup, compassionate_care: compEl ? compEl.checked : false, dog_pound: dpEl ? dpEl.checked : false });
-      if (b && b.booking_group_id) pickupUpd = pickupUpd.eq('booking_group_id', b.booking_group_id);
+      if (b && b.booking_group_id) pickupUpd = pickupUpd.eq('booking_group_id', b.booking_group_id).neq('status', 'cancelled');
       else pickupUpd = pickupUpd.eq('id', bookingId);
       await pickupUpd;
     }
@@ -2518,7 +2531,7 @@ async function manageBookingSave(bookingId) {
       }
       // A manual day override cascades to every dog's invoice in the booking group.
       if (hasOv && b && b.booking_group_id) {
-        const gids = _bookings.filter(x => x.booking_group_id === b.booking_group_id).map(x => x.id);
+        const gids = _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled').map(x => x.id);
         await db.from('invoices').update({ days_billed: days, weeks_billed: weeks }).in('booking_id', gids);
       }
     }
@@ -2690,17 +2703,51 @@ async function doTransferKennel(bookingId) {
 
     const oldKennel = b.kennel_number;
     const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0,10); };
+    const kLabel = n => n === 11 ? 'VIP' : 'K' + n;
 
-    // Whole-booking move (transfer on/before check-in): just change the kennel.
+    // Is the target kennel already occupied by a live booking that overlaps the moving
+    // booking's window? If so we swap (or, for a split, block) rather than silently stack.
+    const ovl = (a1, a2, c1, c2) => a1 <= c2 && a2 >= c1;
+    const mStart = b.check_in_date || D;
+    const mEnd   = b.check_out_date || mStart;
+    const occupant = _bookings.find(o => o.id !== b.id
+      && o.kennel_number === newKennel
+      && (o.status === 'active' || o.status === 'pending')
+      && o.check_in_date && o.check_out_date && o.check_out_date >= o.check_in_date
+      && ovl(mStart, mEnd, o.check_in_date, o.check_out_date));
+
+    // Whole-booking move (transfer on/before check-in): just change the kennel — or,
+    // if the target is occupied, SWAP the two bookings between the kennels.
     if (!b.check_in_date || D <= b.check_in_date) {
+      if (occupant) {
+        const okSwap = confirm(
+          `${kLabel(newKennel)} is occupied by ${occupant.dog_name} (${fmtDate(occupant.check_in_date)} → ${fmtDate(occupant.check_out_date)}).\n\n` +
+          `Swap ${b.dog_name} and ${occupant.dog_name} between ${kLabel(oldKennel)} and ${kLabel(newKennel)}?`);
+        if (!okSwap) { btn.disabled = false; btn.textContent = 'Transfer'; return; }
+        const noteB = (b.notes ? b.notes + ' · ' : '') + `Swapped with ${occupant.dog_name} → moved to ${kLabel(newKennel)}`;
+        const noteO = (occupant.notes ? occupant.notes + ' · ' : '') + `Swapped with ${b.dog_name} → moved to ${kLabel(oldKennel)}`;
+        const r1 = await db.from('bookings').update({ kennel_number: newKennel, notes: noteB, updated_at: new Date().toISOString() }).eq('id', b.id);
+        if (r1.error) throw r1.error;
+        const r2 = await db.from('bookings').update({ kennel_number: oldKennel, notes: noteO, updated_at: new Date().toISOString() }).eq('id', occupant.id);
+        if (r2.error) throw r2.error;
+        closeModal();
+        showToast(`Swapped ${b.dog_name} ↔ ${occupant.dog_name} (${kLabel(oldKennel)} ↔ ${kLabel(newKennel)})`);
+        await loadAll();
+        return;
+      }
       const { error } = await db.from('bookings')
         .update({ kennel_number: newKennel, updated_at: new Date().toISOString() })
         .eq('id', b.id);
       if (error) throw error;
       closeModal();
-      showToast(`${b.dog_name} moved to ${newKennel === 11 ? 'VIP' : 'K' + newKennel}`);
+      showToast(`${b.dog_name} moved to ${kLabel(newKennel)}`);
       await loadAll();
       return;
+    }
+
+    // Split transfer onto an occupied kennel isn't supported — would stack two dogs.
+    if (occupant) {
+      throw new Error(`${kLabel(newKennel)} is occupied by ${occupant.dog_name} during this window. Move or cancel that booking first, or pick another kennel.`);
     }
 
     // Split: historical segment stays on the old kennel (check-in .. D-1); the
@@ -2770,7 +2817,7 @@ function openLogCheckin(booking) {
   const b = _bookings.find(x => x.id === booking.id) || booking;
 
   // Group cascade notice (multi-dog booking)
-  const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id) : [b];
+  const group = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled') : [b];
   const groupNotice = group.length > 1
     ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
          <strong>Group booking</strong> — check-in applies to all ${group.length} dogs. Each dog's kennel can be changed independently below.
@@ -3362,6 +3409,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
 
     if (!dogs.length) throw new Error('At least one dog name is required');
     if (!cinDate || !coutDate) throw new Error('Check-in and check-out dates are required');
+    if (coutDate < cinDate) throw new Error('Check-out date cannot be before the check-in date');
 
     // Warn if any chosen kennel is blocked during the booking window.
     // The user can still proceed — blocks are advisory, not enforced.
@@ -3401,12 +3449,21 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
         if (existing && existing.household_id === householdId) continue;
         d.dogId = null;
       }
-      // Try to match an existing dog by (household, lower(name))
+      // Try to match an existing dog by (household, lower(name)). Includes archived
+      // dogs and restores them, so a returning dog reappears in the list instead of
+      // silently linking to a hidden (archived) record.
       const match = (_dogs || []).find(x =>
         x.household_id === householdId &&
         (x.name || '').toLowerCase() === d.name.toLowerCase()
       );
-      if (match) { d.dogId = match.id; continue; }
+      if (match) {
+        d.dogId = match.id;
+        if (match.archived) {
+          await db.from('dogs').update({ archived: false }).eq('id', match.id);
+          match.archived = false;
+        }
+        continue;
+      }
 
       // Create a new dogs record
       const { data: newDog, error: dogErr } = await db.from('dogs')
@@ -4470,6 +4527,10 @@ function custDogRow(idx, dog = null) {
       </div>
       <div class="form-field"><label>Vaccination status</label><input type="text" class="cust-dog-vax-status" value="${status.replace(/"/g,'&quot;')}" placeholder="e.g. Up to date · DA2PP+R"></div>
       <div class="form-field"><label>Vaccination notes</label><textarea class="cust-dog-vax-notes" rows="2">${notes.replace(/</g,'&lt;')}</textarea></div>
+      <div class="form-field"><label>Vaccination record file (optional)</label>
+        <input type="file" class="cust-dog-vax-file" accept=".pdf,.png,.jpg,.jpeg,.heic">
+        <div style="font-size:0.7rem;color:#94a3b8;margin-top:0.2rem">Uploads when you save; uses the vaccination-due date above as the expiry. More files can be added later from the dog's page.</div>
+      </div>
     </div>`;
 }
 
@@ -4488,7 +4549,7 @@ function custRemoveDog(idx) {
 function openEditCustomer(householdId) {
   _custDogRows = 0;
   const h = householdId ? _households.find(x => x.id === householdId) : null;
-  const existingDogs = h ? (_dogs.filter(d => d.household_id === h.id)) : [];
+  const existingDogs = h ? (_dogs.filter(d => d.household_id === h.id && !d.archived)) : [];
 
   // In ADD mode, use the typeahead picker so William can find an existing
   // customer (and switch to editing them) or add a new one. In EDIT mode,
@@ -4542,26 +4603,63 @@ function openEditCustomer(householdId) {
     for (const r of rows) {
       const name = r.querySelector('.cust-dog-name').value.trim();
       if (!name) continue;
-      const dogId = r.dataset.dogId || null;
+      let dogId = r.dataset.dogId || null;
       const dogPayload = {
         household_id: hhId,
         name,
+        archived: false,  // always (re)surface the dog in the list
         vaccination_status: r.querySelector('.cust-dog-vax-status').value.trim() || null,
         vaccination_due_date: r.querySelector('.cust-dog-vax-due').value || null,
         vaccination_notes: r.querySelector('.cust-dog-vax-notes').value.trim() || null,
       };
+      // No explicit row id → match an existing dog in this household by name
+      // (including archived) so we restore/update it instead of creating a duplicate.
+      if (!dogId) {
+        const match = (_dogs || []).find(x =>
+          x.household_id === hhId && (x.name || '').toLowerCase() === name.toLowerCase());
+        if (match) dogId = match.id;
+      }
       if (dogId) {
         await db.from('dogs').update(dogPayload).eq('id', dogId);
         keepIds.add(dogId);
       } else {
         const { data: ins } = await db.from('dogs').insert(dogPayload).select().single();
-        if (ins?.id) keepIds.add(ins.id);
+        if (ins?.id) dogId = ins.id;
+        if (dogId) keepIds.add(dogId);
+      }
+      // Optional vaccination-record file upload for this dog row (mirrors the dog
+      // detail uploader). Uploads on save; uses the vax-due date as the expiry.
+      const fileInput = r.querySelector('.cust-dog-vax-file');
+      const file = (fileInput && fileInput.files[0]) ? fileInput.files[0] : null;
+      if (file && dogId) {
+        try {
+          const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const path = `${dogId}/${stamp}-${safeName}`;
+          const { error: upErr } = await db.storage.from('vaccination-records')
+            .upload(path, file, { contentType: file.type, upsert: false });
+          if (upErr) throw upErr;
+          await db.from('vaccination_records').insert({
+            dog_id: dogId,
+            expiration_date: dogPayload.vaccination_due_date,
+            file_path: path,
+            file_name: file.name,
+            notes: dogPayload.vaccination_notes,
+            source: 'staff',
+            status: 'approved',
+            approved_at: new Date().toISOString(),
+            approved_by: 'staff',
+          });
+        } catch (e) {
+          showToast('Dog saved, but vaccination upload failed: ' + (e.message || e), 'error');
+        }
       }
     }
-    // Delete dogs that were removed
+    // Dogs removed from the form → ARCHIVE (never hard-delete) so their bookings and
+    // history survive. They can be restored from the dog/customer archived list.
     for (const ed of existingDogs) {
       if (!keepIds.has(ed.id)) {
-        await db.from('dogs').delete().eq('id', ed.id);
+        await db.from('dogs').update({ archived: true }).eq('id', ed.id);
       }
     }
 
@@ -4858,6 +4956,31 @@ async function cancelBooking(bookingId) {
   closeModal();
   showToast(`Booking cancelled: ${label}`);
   await loadAll();
+}
+
+// Permanently DELETE a booking entered in error (not a cancellation — leaves no
+// record). Group-aware: deletes every dog in the booking group. Removes dependent
+// cleanings/invoices/invoice_items first so the FK delete succeeds.
+async function deleteBooking(bookingId) {
+  const b = _bookings.find(x => x.id === bookingId);
+  if (!b) return;
+  const groupId = b.booking_group_id;
+  const group = groupId ? _bookings.filter(x => x.booking_group_id === groupId) : [b];
+  const ids = group.map(x => x.id);
+  const label = group.map(x => x.dog_name).join(' + ') + ' (K' + b.kennel_number + ')';
+  if (!confirm(`Permanently DELETE the booking for ${label}?\n\nThis removes it entirely — it is NOT a cancellation and cannot be undone. Use Cancel instead if the stay was booked but called off.`)) return;
+  try {
+    await db.from('cleanings').delete().in('booking_id', ids);
+    await db.from('invoice_items').delete().in('booking_id', ids);
+    await db.from('invoices').delete().in('booking_id', ids);
+    const { error } = await db.from('bookings').delete().in('id', ids);
+    if (error) throw error;
+    closeModal();
+    showToast(`Booking deleted: ${label}`);
+    await loadAll();
+  } catch (e) {
+    showToast('Delete failed: ' + (e.message || e), 'error');
+  }
 }
 
 // ============================================================
