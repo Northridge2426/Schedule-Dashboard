@@ -176,26 +176,17 @@
     .tbl td { padding: 0.55rem 0.6rem; border-bottom: 1px solid #f8fafc; vertical-align: middle; }
     .tbl tr:last-child td { border-bottom: none; }
 
-    /* ---- Priority dots ---- */
-    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .p-urgent      { background: #ef4444; }
-    .p-high        { background: #f97316; }
-    .p-medium_high { background: #f59e0b; }
-    .p-medium      { background: #3b82f6; }
-    .p-medium_low  { background: #8b5cf6; }
-    .p-low         { background: #cbd5e1; }
-    .p-none        { background: #e2e8f0; }
-
-    /* ---- Priority select ---- */
-    .priority-sel { font-size: 0.72rem; padding: 0.15rem 0.3rem; border: 1px solid #e2e8f0; border-radius: 5px; background: white; cursor: pointer; color: #475569; max-width: 80px; }
-    .priority-sel:focus { outline: none; border-color: #3b82f6; }
-
     /* ---- Task list ---- */
     .task-cols { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
-    @media (min-width: 640px) { .task-cols { grid-template-columns: repeat(3, 1fr); } }
+    @media (min-width: 640px) { .task-cols { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 1024px) { .task-cols { grid-template-columns: repeat(4, 1fr); } }
+    .task-col { min-height: 2rem; }
     .task-col-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: space-between; }
     .task-row { display: flex; align-items: center; gap: 0.35rem; padding: 0.32rem 0; border-bottom: 1px solid #f8fafc; }
     .task-row:last-child { border-bottom: none; }
+    .task-row.dragging { opacity: 0.35; }
+    .drag-handle { cursor: grab; color: #cbd5e1; font-size: 0.85rem; flex-shrink: 0; line-height: 1; }
+    .drag-handle:active { cursor: grabbing; }
     .task-cb { width: 15px; height: 15px; cursor: pointer; accent-color: #22c55e; flex-shrink: 0; }
     .task-title { font-size: 0.83rem; flex: 1; min-width: 0; }
 
@@ -729,7 +720,6 @@ document.getElementById('logout-btn').addEventListener('click', () => db.auth.si
 // ============================================================
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const PRIORITY_LABELS = { urgent:'Urgent', high:'High', medium_high:'Med-High', medium:'Medium', medium_low:'Med-Low', low:'Low', none:'—' };
 
 // Use local date (not UTC) so late-evening MDT doesn't roll to next day
 function todayStr() {
@@ -1854,34 +1844,28 @@ async function assignStore(id, sel) {
 // TASKS
 // ============================================================
 function renderTasks(tasks) {
-  const PORDER = ['urgent','high','medium_high','medium','medium_low','low','none'];
   const groups = {
     task:           { label: 'Task List',      items: [] },
     project:        { label: 'Projects',        items: [] },
     office_project: { label: 'Office Projects', items: [] },
+    weekend:        { label: 'Weekend',         items: [] },
   };
   tasks.forEach(t => { if (groups[t.category]) groups[t.category].items.push(t); });
-  Object.values(groups).forEach(g => { g.items.sort((a,b) => PORDER.indexOf(a.priority) - PORDER.indexOf(b.priority)); });
-
-  const priorityOptions = Object.entries(PRIORITY_LABELS).map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+  Object.values(groups).forEach(g => { g.items.sort((a,b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)); });
 
   let html = '<div class="task-cols">';
   for (const [cat, g] of Object.entries(groups)) {
-    html += `<div>
+    html += `<div class="task-col" data-cat="${cat}" ondragover="taskColDragOver(event)" ondrop="event.preventDefault()">
       <div class="task-col-title">
         ${g.label}
         <button class="btn-add" onclick="openAddTask('${cat}')">+ Add</button>
       </div>`;
     if (!g.items.length) { html += '<div class="empty">Empty</div>'; }
     else g.items.forEach(t => {
-      const selOptions = Object.entries(PRIORITY_LABELS).map(([v,l]) =>
-        `<option value="${v}" ${t.priority===v?'selected':''}>${l}</option>`
-      ).join('');
-      html += `<div class="task-row">
+      html += `<div class="task-row" draggable="true" data-id="${t.id}" ondragstart="taskDragStart(event,'${t.id}')" ondragend="taskDragEnd(event)">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         <input type="checkbox" class="task-cb" title="Mark complete" onchange="completeTask('${t.id}',this)">
-        <span class="dot p-${t.priority}"></span>
         <span class="task-title">${t.title}</span>
-        <select class="priority-sel" onchange="changeTaskPriority('${t.id}',this.value)">${selOptions}</select>
       </div>`;
     });
     html += '</div>';
@@ -5165,36 +5149,78 @@ async function completeTask(id, cb) {
   await loadAll();
 }
 
-async function changeTaskPriority(id, priority) {
-  const { error } = await db.from('tasks').update({ priority }).eq('id', id);
-  if (error) { showToast('Error updating priority', 'error'); return; }
-  // Silently re-render without toast (inline change)
-  const { data } = await db.from('tasks').select('*').eq('status','active');
-  _tasks = data || [];
-  renderTasks(_tasks);
-}
-
 function openAddTask(category) {
-  const catLabels = { task: 'Task', project: 'Project', office_project: 'Office Project' };
-  const priorityOptions = Object.entries(PRIORITY_LABELS).map(([v,l]) =>
-    `<option value="${v}" ${v==='medium'?'selected':''}>${l}</option>`
-  ).join('');
+  const catLabels = { task: 'Task', project: 'Project', office_project: 'Office Project', weekend: 'Weekend' };
 
   const body = `
-    <div class="form-field"><label>Title *</label><input type="text" id="f-task-title" placeholder="What needs to be done?"></div>
-    <div class="form-field"><label>Priority</label><select id="f-task-priority">${priorityOptions}</select></div>`;
+    <div class="form-field"><label>Title *</label><input type="text" id="f-task-title" placeholder="What needs to be done?"></div>`;
 
   openModal('Add ' + catLabels[category], body, async () => {
-    const title    = document.getElementById('f-task-title').value.trim();
-    const priority = document.getElementById('f-task-priority').value;
+    const title = document.getElementById('f-task-title').value.trim();
     if (!title) throw new Error('Title is required');
 
-    const { error } = await db.from('tasks').insert({ title, category, priority, status: 'active' });
+    const maxOrder = _tasks
+      .filter(t => t.category === category && t.status === 'active')
+      .reduce((max, t) => Math.max(max, t.sort_order ?? 0), 0);
+
+    const { error } = await db.from('tasks').insert({ title, category, status: 'active', sort_order: maxOrder + 10 });
     if (error) throw error;
     closeModal();
     showToast('Added: ' + title);
     await loadAll();
   });
+}
+
+// ---- Task drag-and-drop reordering ----
+// Rows are moved live in the DOM during dragover (classic reorder pattern);
+// on dragend we read the final DOM order of every column and persist both
+// sort_order and category (in case the item moved to a different list).
+function taskDragStart(e, id) {
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
+  e.target.classList.add('dragging');
+}
+
+function taskColDragOver(e) {
+  e.preventDefault();
+  const col = e.currentTarget;
+  const dragging = document.querySelector('.task-row.dragging');
+  if (!dragging) return;
+  const emptyEl = col.querySelector(':scope > .empty');
+  if (emptyEl) emptyEl.remove();
+
+  const rows = [...col.querySelectorAll('.task-row:not(.dragging)')];
+  const closest = rows.reduce((best, row) => {
+    const rect = row.getBoundingClientRect();
+    const offset = e.clientY - rect.top - rect.height / 2;
+    if (offset < 0 && offset > best.offset) return { offset, row };
+    return best;
+  }, { offset: -Infinity, row: null });
+
+  if (closest.row) col.insertBefore(dragging, closest.row);
+  else col.appendChild(dragging);
+}
+
+async function taskDragEnd(e) {
+  e.target.classList.remove('dragging');
+
+  const updates = [];
+  document.querySelectorAll('#tasks-body .task-col').forEach(col => {
+    const cat = col.dataset.cat;
+    [...col.querySelectorAll('.task-row')].forEach((row, i) => {
+      updates.push({ id: row.dataset.id, sort_order: (i + 1) * 10, category: cat });
+    });
+  });
+  if (!updates.length) return;
+
+  const results = await Promise.all(updates.map(u =>
+    db.from('tasks').update({ sort_order: u.sort_order, category: u.category }).eq('id', u.id)
+  ));
+  if (results.some(r => r.error)) { showToast('Error saving order', 'error'); }
+
+  const { data } = await db.from('tasks').select('*').eq('status','active');
+  _tasks = data || [];
+  renderTasks(_tasks);
 }
 
 // ============================================================
