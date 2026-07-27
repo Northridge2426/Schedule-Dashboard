@@ -1025,10 +1025,17 @@ async function autoScheduleCleanings() {
   // check out the same day but one cleaning's scheduled_date was bumped by a block-off.
   // Also include legacy cleanings (no booking_id) keyed by their scheduled_date.
   const coveredKennelCheckouts = new Set();
+  // Group-level coverage: if ANY dog in a multi-dog booking_group already has a
+  // cleaning linked to it, treat the whole group as covered. Stronger than the
+  // kennel+checkout check above -- survives a sibling's kennel/checkout drifting
+  // mid-transfer, which caused duplicate cleanings (e.g. two K1 rows for
+  // Odie + "Dog 2", both checkout 2026-07-28, one created days after the other).
+  const coveredGroupIds = new Set();
   for (const c of _cleanings) {
     if (c.booking_id) {
       const lb = bookingById[c.booking_id];
       if (lb && lb.check_out_date) coveredKennelCheckouts.add(`${c.kennel_number}|${lb.check_out_date}`);
+      if (lb && lb.booking_group_id) coveredGroupIds.add(lb.booking_group_id);
     } else if (c.scheduled_date) {
       coveredKennelCheckouts.add(`${c.kennel_number}|${c.scheduled_date}`);
     }
@@ -1040,6 +1047,7 @@ async function autoScheduleCleanings() {
     if (!b.check_out_date) continue;
     if (b.check_out_date < td) continue;  // checkout already passed — no cleaning needed
     if (b.check_out_date < b.check_in_date) continue;  // split/shortened booking artifact
+    if (b.booking_group_id && coveredGroupIds.has(b.booking_group_id)) continue;  // sibling dog in this group already covered
     if (coveredKennelCheckouts.has(`${b.kennel_number}|${b.check_out_date}`)) continue;
     toCreate.push({
       kennel_number: b.kennel_number,
@@ -1049,9 +1057,10 @@ async function autoScheduleCleanings() {
       status: 'pending',
       booking_id: b.id,
     });
-    // Mark this kennel+checkout covered so sibling dogs in the same multi-dog
-    // booking don't each spawn their own cleaning (one cleaning per kennel).
+    // Mark this kennel+checkout (and group) covered so sibling dogs in the same
+    // multi-dog booking don't each spawn their own cleaning (one cleaning per kennel).
     coveredKennelCheckouts.add(`${b.kennel_number}|${b.check_out_date}`);
+    if (b.booking_group_id) coveredGroupIds.add(b.booking_group_id);
   }
   if (toCreate.length) {
     // Plain insert (not upsert): the partial unique index on (kennel_number,
@@ -2203,6 +2212,9 @@ function openBookingChooser(bookingId) {
   const titleSuffix = group.length > 1
     ? ` — ${group.map(g => g.dog_name).join(' + ')}`
     : ` — ${b.dog_name}`;
+  const cancelHTML = (b.status !== 'completed' && b.status !== 'cancelled')
+    ? `<button class="btn btn-secondary" onclick="cancelBooking('${b.id}')" style="padding:0.75rem;text-align:left;color:#b45309;border-color:#fde68a">✕ Cancel booking${group.length > 1 ? ' (all ' + group.length + ' dogs)' : ''}<span style="display:block;font-size:0.7rem;font-weight:400;color:#94a3b8;margin-top:0.15rem">Stay was booked but called off — keeps a cancelled record</span></button>`
+    : '';
   const dangerHTML = `<button class="btn btn-secondary" onclick="deleteBooking('${b.id}')" style="padding:0.75rem;text-align:left;color:#b91c1c;border-color:#fecaca">🗑 Delete booking${group.length > 1 ? ' (all ' + group.length + ' dogs)' : ''}<span style="display:block;font-size:0.7rem;font-weight:400;color:#94a3b8;margin-top:0.15rem">Entered in error — removes it entirely (not a cancellation)</span></button>`;
 
   const body = `<div style="display:flex;flex-direction:column;gap:0.5rem">
@@ -2210,6 +2222,7 @@ function openBookingChooser(bookingId) {
     ${editHTML}
     ${dogsHTML}
     ${ownerHTML}
+    ${cancelHTML}
     ${dangerHTML}
   </div>`;
 
@@ -2681,7 +2694,7 @@ function openTransferKennel(bookingId) {
         <input type="date" id="tk-date" value="${defDate}" min="${b.check_in_date || ''}" max="${b.check_out_date || ''}">
       </div>
     </div>
-    <div style="font-size:0.78rem;color:#64748b">Tip: pick the check-in date to move the whole booking with no split.</div>`;
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:0.5rem 0.75rem;font-size:0.8rem;color:#92400e">⚠ To move the <strong>whole</strong> booking with no split (e.g. the dog just checked in and hasn't stayed a night yet), set the transfer date to the <strong>check-in date (${fmtDate(b.check_in_date)})</strong> — any later date leaves a leftover day behind on ${curLabel}.</div>`;
   openModal('Transfer ' + b.dog_name + ' — from ' + curLabel, body, null);
   document.getElementById('modal-footer').innerHTML = `
     <button class="btn btn-secondary" onclick="openLogCheckoutById('${b.id}')">Back</button>
