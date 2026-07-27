@@ -257,6 +257,8 @@
     .kc-cell.kc-cancelled-brown s { text-decoration: line-through; color: #fde68a; }
     /* Small strip appended inside a cell when a cancelled booking overlaps an active one */
     .kc-cancelled-strip { font-size: 0.42rem; line-height: 1.2; background: rgba(120,53,15,0.30); color: #fde68a; margin: 1px -0.3rem -0.15rem; padding: 0 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: line-through; }
+    /* Month-divider row -- marks where a new month starts in the continuous-scroll calendar */
+    .kc-table tr.kc-month-divider td { background: #eef2f7; color: #334155; font-weight: 700; text-align: center; padding: 0.5rem; font-size: 0.85rem; border-top: 2px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; }
     .kc-cell.kc-blocked  { background: repeating-linear-gradient(45deg, #f1f5f9 0 6px, #e2e8f0 6px 12px); color: #64748b; cursor: pointer; font-size: 0.62rem; }
     .kc-cell.kc-span-mid { color: transparent; }
     .kc-cell.kc-clean-marker { position: relative; border-bottom: 3px solid #fbbf24 !important; }
@@ -370,6 +372,7 @@
     <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
     <button class="more-btn" id="more-reports" onclick="switchTab('reports')">📊 Reports</button>
     <button class="more-btn" id="more-users" onclick="switchTab('users')">👤 Users</button>
+    <button class="more-btn" id="more-blockkennel" onclick="toggleMoreMenu();openAddKennelBlock()">🚧 Block off a kennel</button>
     <button class="more-btn" id="more-backup" onclick="toggleMoreMenu();downloadBackup(this)">⬇ Backup data</button>
   </div>
 
@@ -2533,14 +2536,19 @@ async function manageBookingSave(bookingId) {
       const dropoff    = document.getElementById('f-dropoff').checked;
       const grace      = document.getElementById('f-grace').checked;
       const graceNotes = document.getElementById('f-grace-notes')?.value || null;
+      const compChecked = document.getElementById('f-compassionate')?.checked ?? false;
       const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bookingId).maybeSingle();
       if (inv) {
-        await db.from('invoices').update({
+        const invPatch = {
           days_billed: days, weeks_billed: weeks,
           off_site_delivery: offsite, outside_window_pickup: outside,
           outside_hours_dropoff: dropoff,
           grace_extension_applied: grace, grace_extension_notes: graceNotes,
-        }).eq('id', inv.id);
+        };
+        // Compassionate Care checked retroactively -- no charge, so mark the
+        // existing invoice paid instead of leaving it sitting in Awaiting Invoice.
+        if (compChecked) { invPatch.status = 'paid'; invPatch.paid_date = todayStr(); }
+        await db.from('invoices').update(invPatch).eq('id', inv.id);
       }
       // A manual day override cascades to every dog's invoice in the booking group.
       if (hasOv && b && b.booking_group_id) {
@@ -2611,8 +2619,19 @@ async function manageBookingCheckout(bookingId) {
       invoice_date: invDate,
     };
     for (const bid of bookingIds) {
-      if (compassionate) continue; // no charge - skip invoice
       const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bid).maybeSingle();
+      if (compassionate) {
+        // No-charge stay -- still create/update the invoice so it counts in
+        // Reports and CSV export, but mark it paid immediately so it never
+        // sits in Awaiting Invoice (there's nothing to invoice or collect).
+        const compData = { ...invData, status: 'paid', paid_date: todayStr() };
+        if (inv) await db.from('invoices').update(compData).eq('id', inv.id);
+        else {
+          const { error: invErr } = await db.from('invoices').insert({ booking_id: bid, ...compData });
+          if (invErr) throw invErr;
+        }
+        continue;
+      }
       if (inv) {
         await db.from('invoices').update(invData).eq('id', inv.id);
       } else {
@@ -3564,21 +3583,38 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
 }
 
 // ============================================================
-// KENNEL CALENDAR (Expanded view)
+// KENNEL CALENDAR (Expanded view) — continuous scroll across months, with
+// month-divider rows and a ‹ Today › jump bar pinned at the top. _calMonth is
+// the "focused" month (drives the top label + CSV export default); the actual
+// rendered range is [_calRangeStart, _calRangeEnd] and grows as the user
+// scrolls near either edge.
 // ============================================================
-let _calMonth = null; // Date pointing at the 1st of the displayed month
+let _calMonth      = null; // Date pointing at the 1st of the *focused* month
+let _calRangeStart = null; // Date, 1st of the earliest month currently rendered
+let _calRangeEnd   = null; // Date, 1st of the latest month currently rendered
+let _kcExtending   = false; // re-entrancy guard while a scroll-triggered extend is in flight
+const KC_BACK_MONTHS  = 1; // months loaded before the focused month on open
+const KC_FWD_MONTHS   = 2; // months loaded after the focused month on open
+const KC_EXTEND_CHUNK = 2; // months added each time the user scrolls near an edge
 
 function openKennelCalendar() {
-  if (!_calMonth) {
-    const t = new Date();
-    _calMonth = new Date(t.getFullYear(), t.getMonth(), 1);
-  }
+  const t = new Date();
+  if (!_calMonth) _calMonth = new Date(t.getFullYear(), t.getMonth(), 1);
+  _calRangeStart = new Date(_calMonth.getFullYear(), _calMonth.getMonth() - KC_BACK_MONTHS, 1);
+  _calRangeEnd   = new Date(_calMonth.getFullYear(), _calMonth.getMonth() + KC_FWD_MONTHS, 1);
   document.getElementById('kc-overlay').classList.add('open');
   renderKennelCalendar();
+  wireKcScroll();
+  setTimeout(() => {
+    const r = document.querySelector('#kc-table-wrap tr.kc-today');
+    if (r) r.scrollIntoView({ block: 'center' });
+  }, 30);
 }
 
 function closeKennelCalendar() {
   document.getElementById('kc-overlay').classList.remove('open');
+  const wrap = document.getElementById('kc-table-wrap');
+  if (wrap) wrap.onscroll = null;
 }
 
 function kcHandleOverlayClick(e) {
@@ -3586,19 +3622,98 @@ function kcHandleOverlayClick(e) {
 }
 
 function kcShift(delta) {
-  _calMonth = new Date(_calMonth.getFullYear(), _calMonth.getMonth() + delta, 1);
-  renderKennelCalendar();
+  kcGoToMonth(new Date(_calMonth.getFullYear(), _calMonth.getMonth() + delta, 1));
 }
 
 function kcGoToday() {
   const t = new Date();
-  _calMonth = new Date(t.getFullYear(), t.getMonth(), 1);
-  renderKennelCalendar();
-  // Scroll today's row into view
+  kcGoToMonth(new Date(t.getFullYear(), t.getMonth(), 1));
   setTimeout(() => {
     const r = document.querySelector('#kc-table-wrap tr.kc-today');
     if (r) r.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, 50);
+  }, 80);
+}
+
+// Scrolls the continuous calendar to a given month, extending the loaded
+// range first if the target hasn't been rendered yet (e.g. the ‹ › buttons
+// jumping further than the user has scrolled so far).
+function kcGoToMonth(target) {
+  let changed = false;
+  while (target < _calRangeStart) {
+    _calRangeStart = new Date(_calRangeStart.getFullYear(), _calRangeStart.getMonth() - KC_EXTEND_CHUNK, 1);
+    changed = true;
+  }
+  while (target > _calRangeEnd) {
+    _calRangeEnd = new Date(_calRangeEnd.getFullYear(), _calRangeEnd.getMonth() + KC_EXTEND_CHUNK, 1);
+    changed = true;
+  }
+  _calMonth = target;
+  document.getElementById('kc-month-label').textContent = kcFmtMonth(target);
+  if (changed) renderKennelCalendar();
+  setTimeout(() => {
+    const key = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}`;
+    const div = document.querySelector(`tr.kc-month-divider[data-month="${key}"]`);
+    if (div) div.scrollIntoView({ block: 'start', behavior: changed ? 'auto' : 'smooth' });
+  }, changed ? 30 : 0);
+}
+
+// Grows the rendered range by KC_EXTEND_CHUNK months when the user scrolls
+// near the bottom/top edge, preserving scroll position across the rebuild
+// (innerHTML replacement resets scrollTop, so we restore it manually).
+function kcExtendForward() {
+  _kcExtending = true;
+  const wrap = document.getElementById('kc-table-wrap');
+  const prevTop = wrap.scrollTop;
+  _calRangeEnd = new Date(_calRangeEnd.getFullYear(), _calRangeEnd.getMonth() + KC_EXTEND_CHUNK, 1);
+  renderKennelCalendar();
+  wrap.scrollTop = prevTop;
+  _kcExtending = false;
+}
+
+function kcExtendBackward() {
+  _kcExtending = true;
+  const wrap = document.getElementById('kc-table-wrap');
+  const prevHeight = wrap.scrollHeight;
+  const prevTop    = wrap.scrollTop;
+  _calRangeStart = new Date(_calRangeStart.getFullYear(), _calRangeStart.getMonth() - KC_EXTEND_CHUNK, 1);
+  renderKennelCalendar();
+  wrap.scrollTop = prevTop + (wrap.scrollHeight - prevHeight);
+  _kcExtending = false;
+}
+
+function wireKcScroll() {
+  const wrap = document.getElementById('kc-table-wrap');
+  if (!wrap) return;
+  let ticking = false;
+  wrap.onscroll = () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      kcUpdateFocusedMonth();
+      if (!_kcExtending) {
+        if (wrap.scrollTop + wrap.clientHeight > wrap.scrollHeight - 400) kcExtendForward();
+        else if (wrap.scrollTop < 400) kcExtendBackward();
+      }
+      ticking = false;
+    });
+  };
+}
+
+// Keeps the top month label + `_calMonth` in sync with whatever month is
+// actually scrolled into view, so Today/‹/› stay anchored to what you're
+// looking at rather than wherever the calendar was first opened.
+function kcUpdateFocusedMonth() {
+  const wrap = document.getElementById('kc-table-wrap');
+  if (!wrap) return;
+  const dividers = [...wrap.querySelectorAll('tr.kc-month-divider')];
+  let current = dividers[0];
+  for (const div of dividers) {
+    if (div.offsetTop - wrap.scrollTop <= 40) current = div; else break;
+  }
+  if (!current) return;
+  const [y, m] = current.getAttribute('data-month').split('-').map(Number);
+  _calMonth = new Date(y, m - 1, 1);
+  document.getElementById('kc-month-label').textContent = kcFmtMonth(_calMonth);
 }
 
 function kcFmtMonth(d) {
@@ -3618,17 +3733,15 @@ function kcDateStr(d) {
 }
 
 function renderKennelCalendar() {
-  const month = _calMonth;
-  document.getElementById('kc-month-label').textContent = kcFmtMonth(month);
+  document.getElementById('kc-month-label').textContent = kcFmtMonth(_calMonth);
 
-  const year = month.getFullYear();
-  const mIdx = month.getMonth();
-  const daysInMonth = new Date(year, mIdx + 1, 0).getDate();
-  const monthStart = kcDateStr(new Date(year, mIdx, 1));
-  const monthEnd   = kcDateStr(new Date(year, mIdx, daysInMonth));
+  const rangeStartD     = _calRangeStart;
+  const rangeEndLastDay = new Date(_calRangeEnd.getFullYear(), _calRangeEnd.getMonth() + 1, 0);
+  const monthStart = kcDateStr(rangeStartD);
+  const monthEnd   = kcDateStr(rangeEndLastDay);
   const today      = todayStr();
 
-  // Index bookings that intersect this month — cancelled kept separate so active
+  // Index bookings that intersect the rendered range — cancelled kept separate so active
   // bookings always win styling/click, while cancelled show as a brown overlay.
   const occupancy          = {}; // non-cancelled: `${kennel}|${dateStr}` -> [booking, ...]
   const occupancyCancelled = {}; // cancelled only: same key structure
@@ -3676,14 +3789,19 @@ function renderKennelCalendar() {
   // Date-aware blocked-kennel check uses getKennelBlocksOn(k, dateStr) per cell.
   // (Replaces the old kennels.blocked_off boolean lookup which had no date scope.)
 
-  // Build table
+  // Build table — continuous scroll across every month in [_calRangeStart,
+  // _calRangeEnd], with a month-divider row wherever a new month starts. The
+  // ‹ Today › controls and label at the top scroll to / extend toward a target.
   let html = '<table class="kc-table"><thead><tr><th class="kc-corner kc-date-cell"></th>';
   for (let k = 1; k <= 11; k++) html += `<th>${k === 11 ? 'VIP' : 'K' + k}</th>`;
   html += '</tr></thead><tbody>';
 
-  for (let day = 1; day <= daysInMonth; day++) {
-    const d = new Date(year, mIdx, day);
+  for (let d = new Date(rangeStartD); d <= rangeEndLastDay; d.setDate(d.getDate() + 1)) {
     const ds = kcDateStr(d);
+    if (d.getDate() === 1) {
+      const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      html += `<tr class="kc-month-divider" data-month="${mKey}"><td colspan="12">${kcFmtMonth(d)}</td></tr>`;
+    }
     const dow = d.getDay();
     const isWeekend = (dow === 0 || dow === 6);
     const isToday = (ds === today);
@@ -3803,14 +3921,9 @@ function renderKennelCalendar() {
       }
     });
   });
-
-  // Scroll today's row into view on open if visible
-  if (document.querySelector('#kc-table-wrap tr.kc-today')) {
-    setTimeout(() => {
-      const r = document.querySelector('#kc-table-wrap tr.kc-today');
-      if (r) r.scrollIntoView({ block: 'center' });
-    }, 30);
-  }
+  // (Scrolling to "today" is handled by openKennelCalendar/kcGoToday, not here --
+  // this function also runs on every scroll-triggered range extension, and
+  // re-snapping to today on every extend would fight the user's scrolling.)
 }
 
 // ============================================================
