@@ -370,6 +370,7 @@
     <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
     <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
+    <button class="more-btn" id="more-bookings" onclick="switchTab('bookings')">📖 Bookings</button>
     <button class="more-btn" id="more-reports" onclick="switchTab('reports')">📊 Reports</button>
     <button class="more-btn" id="more-users" onclick="switchTab('users')">👤 Users</button>
     <button class="more-btn" id="more-blockkennel" onclick="toggleMoreMenu();openAddKennelBlock()">🚧 Block off a kennel</button>
@@ -530,6 +531,57 @@
           <button class="btn-add" onclick="openAddUser()">+ Add User</button>
         </div>
         <div class="card-body" id="users-body"><div class="loading">Loading&hellip;</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOOKINGS PAGE (admin only) -->
+  <div id="bookings-view" style="display:none">
+    <div class="page-view">
+      <div class="card">
+        <div class="card-header">
+          <h2>Bookings</h2>
+          <span class="badge badge-gray" id="bk-count">0</span>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;margin-bottom:0.75rem">
+            <div class="form-field" style="flex:1;min-width:180px;margin-bottom:0">
+              <label>Search</label>
+              <input type="text" id="bk-search" placeholder="Dog or owner name…" oninput="setBkSearch(this.value)">
+            </div>
+            <div class="form-field" style="min-width:130px;margin-bottom:0">
+              <label>Status</label>
+              <select id="bk-status" onchange="setBkStatus(this.value)">
+                <option value="all">All</option>
+                <option value="pending">Pending</option>
+                <option value="active">Active</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div class="form-field" style="min-width:100px;margin-bottom:0">
+              <label>Kennel</label>
+              <select id="bk-kennel" onchange="setBkKennel(this.value)">
+                <option value="all">All</option>
+                <option value="1">K1</option>
+                <option value="2">K2</option>
+                <option value="3">K3</option>
+                <option value="4">K4</option>
+                <option value="5">K5</option>
+                <option value="6">K6</option>
+                <option value="7">K7</option>
+                <option value="8">K8</option>
+                <option value="9">K9</option>
+                <option value="10">K10</option>
+                <option value="11">VIP</option>
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;color:#334155;padding-bottom:0.6rem;white-space:nowrap">
+              <input type="checkbox" id="bk-upcoming" onchange="setBkUpcoming(this.checked)" style="width:auto"> Upcoming only
+            </label>
+          </div>
+          <div id="bookings-body"><div class="loading">Loading&hellip;</div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -5485,7 +5537,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','reports','users'];
+const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','bookings','reports','users'];
 
 function switchTab(tab) {
   if (!isTabAllowed(tab)) tab = 'overview';
@@ -5517,6 +5569,7 @@ function switchTab(tab) {
     if (!_currentDogId) renderDogsList();
     else renderDogPage();
   }
+  if (tab === 'bookings') renderBookings();
   if (tab === 'reports') renderReports();
   if (tab === 'users') renderUsers();
 }
@@ -5524,6 +5577,94 @@ function switchTab(tab) {
 function toggleMoreMenu() {
   document.getElementById('more-dropdown').classList.toggle('open');
 }
+
+// ============================================================
+// BOOKINGS PAGE — flat list of every booking (all statuses, all history) so
+// a specific entry can always be found & corrected directly, even when the
+// kennel calendar/status card is only showing one of two overlapping
+// bookings in the same kennel (e.g. a booking saved before its kennel was
+// picked, defaulting to K1 and silently doubling up with what's already
+// there). Reuses openBookingChooser for edit/cancel/delete — same actions,
+// same group-aware/invoice-aware safety checks as everywhere else.
+// ============================================================
+let _bkSearch = '';
+let _bkStatus = 'all';
+let _bkKennel = 'all';
+let _bkUpcoming = false;
+
+function setBkSearch(v){ _bkSearch = v; renderBookings(); }
+function setBkStatus(v){ _bkStatus = v; renderBookings(); }
+function setBkKennel(v){ _bkKennel = v; renderBookings(); }
+function setBkUpcoming(v){ _bkUpcoming = v; renderBookings(); }
+
+function bkStatusBadge(status) {
+  const map = {
+    pending:   ['badge-blue',  'Pending'],
+    active:    ['badge-green', 'Active'],
+    completed: ['badge-gray',  'Completed'],
+    cancelled: ['badge-red',   'Cancelled'],
+  };
+  const [cls, label] = map[status] || ['badge-gray', status || '—'];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function renderBookings() {
+  const body = document.getElementById('bookings-body');
+  if (!body) return;
+  const td = todayStr();
+  const q = (_bkSearch || '').trim().toLowerCase();
+
+  let rows = [..._bookings];
+  if (_bkStatus !== 'all') rows = rows.filter(b => b.status === _bkStatus);
+  if (_bkKennel !== 'all') rows = rows.filter(b => String(b.kennel_number) === _bkKennel);
+  if (_bkUpcoming) rows = rows.filter(b => !b.check_out_date || b.check_out_date >= td);
+  if (q) {
+    rows = rows.filter(b => {
+      const owner = (_households || []).find(h => h.id === b.household_id);
+      return (b.dog_name || '').toLowerCase().includes(q)
+          || (owner?.owner_name || '').toLowerCase().includes(q);
+    });
+  }
+
+  // Most recent / nearest-future check-in first, so a just-entered mistake
+  // (like a same-day duplicate) surfaces at the top of the list.
+  rows.sort((a, b) => {
+    const d = (b.check_in_date || '').localeCompare(a.check_in_date || '');
+    if (d !== 0) return d;
+    return (b.created_at || '').localeCompare(a.created_at || '');
+  });
+
+  const countEl = document.getElementById('bk-count');
+  if (countEl) countEl.textContent = rows.length;
+
+  if (!rows.length) {
+    body.innerHTML = '<div class="empty">No bookings match this filter.</div>';
+    return;
+  }
+
+  let html = '<div style="display:flex;flex-direction:column;gap:0.4rem">';
+  rows.forEach(b => {
+    const owner = (_households || []).find(h => h.id === b.household_id);
+    const kennelLabel = b.kennel_number === 11 ? 'VIP' : 'K' + b.kennel_number;
+    const groupCount = b.booking_group_id
+      ? _bookings.filter(x => x.booking_group_id === b.booking_group_id).length
+      : 1;
+    const groupTag = groupCount > 1 ? ` <span class="badge badge-purple" style="font-size:0.6rem">group of ${groupCount}</span>` : '';
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.55rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;background:white;cursor:pointer"
+                  onclick="openBookingChooser('${b.id}')"
+                  onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:0.9rem">🐾 ${b.dog_name}${groupTag}</div>
+        <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner ? owner.owner_name : '(no owner on file)'} &middot; ${fmtDateY(b.check_in_date)} &rarr; ${fmtDateY(b.check_out_date)}</div>
+      </div>
+      <span class="badge badge-gray" style="font-size:0.7rem">${kennelLabel}</span>
+      ${bkStatusBadge(b.status)}
+    </div>`;
+  });
+  html += '</div>';
+  body.innerHTML = html;
+}
+
 // ============================================================
 // REPORTS PAGE
 // Counts are derived in-memory from the already-loaded arrays.
