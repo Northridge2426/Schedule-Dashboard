@@ -5824,12 +5824,19 @@ function computeReportMetrics(start,end){
   const boarding = _bookings.filter(b => b.status!=='cancelled' && !b.dog_pound);
   const boardingOverlap = boarding.filter(overlaps);
 
-  // Distinct kennel-nights
-  const knSet=new Set(), stdSet=new Set(), kennelCount={};
+  // For an ongoing period, "so far" stops at today rather than the period end
+  const _today = todayStr();
+  const elapsedEnd = end>_today ? _today : end;
+  const ongoing = end>_today && _today>=start;
+  const elapsedDays = elapsedEnd>=start ? diffDays(start,elapsedEnd)+1 : 0;
+
+  // Distinct kennel-nights + dogs on site per day
+  const knSet=new Set(), stdSet=new Set(), kennelCount={}, dogsByDate={};
   boardingOverlap.forEach(b=>{
     let s = b.check_in_date>start ? b.check_in_date : start;
     let e = b.check_out_date<end ? b.check_out_date : end;
     for (let d=s; d<=e; d=_rshift(d,1)){
+      if (d<=elapsedEnd) dogsByDate[d]=(dogsByDate[d]||0)+1;
       const key=b.kennel_number+'|'+d;
       if (!knSet.has(key)){
         knSet.add(key);
@@ -5837,6 +5844,12 @@ function computeReportMetrics(start,end){
         if (b.kennel_number<=10) stdSet.add(key);
       }
     }
+  });
+  // Avg dogs on site at one time = dog-nights / days elapsed (full period once it's over)
+  let dogNights=0, peakDogs=0, peakDate=null;
+  Object.keys(dogsByDate).forEach(d=>{
+    dogNights += dogsByDate[d];
+    if (dogsByDate[d]>peakDogs){ peakDogs=dogsByDate[d]; peakDate=d; }
   });
 
   // Per-customer days (one dog per logical booking)
@@ -5887,6 +5900,12 @@ function computeReportMetrics(start,end){
     cleaningsRefresh: cleaningsDone.filter(c=>c.type==='quick_refresh').length,
     offsite: new Set(boardingOverlap.filter(b=>b.off_site_pickup).map(grp)).size,
     avgStay: stayN? staySum/stayN : 0,
+    dogNights,
+    dogDayCount: elapsedDays,
+    dogDaysOngoing: ongoing,
+    avgDogsAtOnce: elapsedDays? dogNights/elapsedDays : 0,
+    peakDogs,
+    peakDate,
     avgDogsPerBooking: bookingsCount? boardingOverlap.length/bookingsCount : 0,
     newCustomers: _households.filter(h=> h.created_at && inP(h.created_at.slice(0,10))).length,
     compassionate: new Set(boardingOverlap.filter(b=>b.compassionate_care).map(grp)).size,
@@ -5959,6 +5978,7 @@ function renderReports(){
   const insights = [
     repKpi('Avg Stay', m.avgStay, P('avgStay'), {fmt:v=>v? v.toFixed(1):'—', sub:'nights / booking', decimal:true}),
     repKpi('Avg Dogs / Booking', m.avgDogsPerBooking, P('avgDogsPerBooking'), {fmt:v=>v? v.toFixed(1):'—', decimal:true}),
+    repKpi('Avg Dogs at One Time', m.avgDogsAtOnce, P('avgDogsAtOnce'), {fmt:v=>v? v.toFixed(1):'—', decimal:true, sub: m.dogDayCount? `${m.dogNights} dog-nights &divide; ${m.dogDayCount} day${m.dogDayCount===1?'':'s'}${m.dogDaysOngoing?' so far':''}${m.peakDogs?' &middot; peak '+m.peakDogs:''}` : 'period not started'}),
     repKpi('New Customers', m.newCustomers, P('newCustomers'), {sub:'added in period'}),
     repKpi('Compassionate Stays', m.compassionate, P('compassionate'), {sub:'no-charge (incl. above)'}),
     repKpi('Busiest Kennel', m.busiestLabel, null, {fmt:v=>v, sub:`${m.busiestN} nights booked`}),
