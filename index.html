@@ -234,6 +234,27 @@
     .kc-legend-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.1); }
 
     .kc-table-wrap { flex: 1; overflow: auto; }
+    /* Booking details panel (opens when a kennel/condo block is tapped) */
+    .bd-sec { border:1px solid #e2e8f0; border-radius:10px; padding:0.6rem 0.7rem; margin-bottom:0.55rem; background:#fff; }
+    .bd-sec-title { font-size:0.66rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:0.35rem; }
+    .bd-line { display:flex; align-items:baseline; gap:0.5rem; font-size:0.9rem; color:#0f172a; }
+    .bd-line + .bd-line { margin-top:0.2rem; }
+    .bd-key { font-size:0.72rem; color:#64748b; min-width:3.2rem; flex-shrink:0; }
+    .bd-sub { font-size:0.76rem; color:#64748b; margin-top:0.1rem; }
+    .bd-edit { color:#1d4ed8; cursor:pointer; font-size:0.74rem; font-weight:600; text-decoration:none; border:1px solid #dbeafe; background:#eff6ff; border-radius:999px; padding:0.05rem 0.45rem; white-space:nowrap; }
+    .bd-edit:hover { background:#dbeafe; }
+    .bd-animal { border-top:1px dashed #e2e8f0; padding-top:0.5rem; margin-top:0.5rem; }
+    .bd-animal:first-child { border-top:0; padding-top:0; margin-top:0; }
+    .bd-animal-head { display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.3rem; }
+    .bd-animal-name { font-weight:700; font-size:0.95rem; }
+    .bd-note-label { font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8; margin-top:0.35rem; }
+    .bd-note { font-size:0.83rem; color:#334155; white-space:pre-wrap; line-height:1.35; }
+    .bd-note-empty { font-size:0.8rem; color:#cbd5e1; font-style:italic; }
+    .bd-actions { display:flex; flex-direction:column; gap:0.4rem; margin-top:0.15rem; }
+    .bd-minor { display:flex; gap:0.4rem; margin-top:0.15rem; }
+    .bd-minor .btn { flex:1; font-size:0.78rem; }
+    .kc-catsep { border-left: 2px solid #94a3b8 !important; }
+    .kc-cat-col { background-image: linear-gradient(rgba(139,92,246,0.06), rgba(139,92,246,0.06)); }
     .kc-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 720px; font-size: 0.78rem; }
     .kc-table th, .kc-table td { padding: 0; border-bottom: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; }
     .kc-table th { background: #f8fafc; font-weight: 700; color: #475569; text-align: center; padding: 0.55rem 0.25rem; position: sticky; top: 0; z-index: 2; }
@@ -370,6 +391,7 @@
     <button class="more-btn" id="more-tasks" onclick="switchTab('tasks')">Tasks &amp; Projects</button>
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
     <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
+    <button class="more-btn" id="more-cats" onclick="switchTab('cats')">🐈 Cats</button>
     <button class="more-btn" id="more-bookings" onclick="switchTab('bookings')">📖 Bookings</button>
     <button class="more-btn" id="more-reports" onclick="switchTab('reports')">📊 Reports</button>
     <button class="more-btn" id="more-users" onclick="switchTab('users')">👤 Users</button>
@@ -493,6 +515,13 @@
   </div>
 
   <!-- REPORTS PAGE -->
+  <!-- CATS PAGE (same layout as Dogs, filtered to species = cat) -->
+  <div id="cats-view" style="display:none">
+    <div class="page-view" id="cats-page-body">
+      <div class="loading">Loading&hellip;</div>
+    </div>
+  </div>
+
   <div id="reports-view" style="display:none">
     <div class="page-view">
       <h2 style="margin-bottom:0.75rem">Reports</h2>
@@ -574,6 +603,15 @@
                 <option value="9">K9</option>
                 <option value="10">K10</option>
                 <option value="11">VIP</option>
+                <option value="cats">— All cat condos —</option>
+                <option value="18">Cat Left (L1–L3)</option>
+                <option value="19">Cat Right (R1–R3)</option>
+                <option value="12">Condo L1</option>
+                <option value="13">Condo L2</option>
+                <option value="14">Condo L3</option>
+                <option value="15">Condo R1</option>
+                <option value="16">Condo R2</option>
+                <option value="17">Condo R3</option>
               </select>
             </div>
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;color:#334155;padding-bottom:0.6rem;white-space:nowrap">
@@ -716,7 +754,7 @@ const $dash  = document.getElementById('dashboard-view');
 // The invited-users list + roles live in the `app_users` table and are enforced
 // by database row-level security. Admins see every page; "limited" users see
 // only LIMITED_ALLOWED_TABS. Manage users from the Users page (admin only).
-const LIMITED_ALLOWED_TABS = ['overview','invoices','shopping','customers','dogs','reports'];
+const LIMITED_ALLOWED_TABS = ['overview','invoices','shopping','customers','dogs','cats','reports'];
 let _userRole = 'limited';
 let _userEmail = '';
 
@@ -999,7 +1037,9 @@ async function loadAll() {
 // share a kennel; different cancellations are not stacked. Kennel doesn't matter for a
 // cancellation (reporting only) — this is purely so every booking stays visible.
 async function relocateConflictedCancellations() {
-  const cancelled = _bookings.filter(b => b.status === 'cancelled' && b.check_in_date && b.check_out_date);
+  // Cat-condo bookings are left where they are — the spare-kennel search below
+  // only knows about dog kennels, and a cancelled cat has nowhere else to go.
+  const cancelled = _bookings.filter(b => b.status === 'cancelled' && b.check_in_date && b.check_out_date && !isCatBooking(b));
   if (!cancelled.length) return;
   const occupied = _bookings.filter(b => (b.status === 'active' || b.status === 'pending' || b.status === 'completed') && b.check_in_date && b.check_out_date);
   const ov = (a1, a2, b1, b2) => a1 <= b2 && a2 >= b1;
@@ -1048,11 +1088,11 @@ async function autoScheduleCleanings() {
   // earliestFree[k]: earliest date the kennel is physically free to clean.
   // Active bookings keep the kennel occupied until their check_out_date.
   const earliestFree = {};
-  for (let k = 1; k <= 11; k++) earliestFree[k] = td;
+  ALL_SPACE_NUMS.forEach(k => { earliestFree[k] = td; });
   _bookings.filter(b => b.status === 'active').forEach(b => {
-    if (b.check_out_date && b.check_out_date > earliestFree[b.kennel_number]) {
-      earliestFree[b.kennel_number] = b.check_out_date;
-    }
+    spaceUnits(b.kennel_number).concat([parseInt(b.kennel_number, 10)]).forEach(u => {
+      if (b.check_out_date && b.check_out_date > (earliestFree[u] || td)) earliestFree[u] = b.check_out_date;
+    });
   });
 
   const bookingById = {};
@@ -1063,7 +1103,9 @@ async function autoScheduleCleanings() {
   // arrives *after* this cleaning — used to flag tight turnarounds as urgent).
   const nextCheckinOnOrAfter = (k, fromDate) => {
     let best = null;
-    _bookings.filter(b => b.status === 'pending' && b.kennel_number === k && b.check_in_date && b.check_in_date >= fromDate)
+    // spacesOverlap (not ===) so a cat booked on a whole side counts as the next
+    // check-in for each of its three condos, and vice-versa.
+    _bookings.filter(b => b.status === 'pending' && spacesOverlap(b.kennel_number, k) && b.check_in_date && b.check_in_date >= fromDate)
       .forEach(b => { if (!best || b.check_in_date < best) best = b.check_in_date; });
     return best;
   };
@@ -1323,8 +1365,9 @@ function renderKennels(bookings, cleanings, kennels) {
     dirtyKennels.add(c.kennel_number);
   });
 
-  // Capacity = distinct kennels with active stays only
-  const occupied   = Object.keys(activeByKennel).length;
+  // Capacity = distinct DOG kennels (1–10) with active stays. VIP and the cat
+  // condo are extra spaces and don't count against the 10-kennel capacity bar.
+  const occupied   = Object.keys(activeByKennel).filter(k => parseInt(k, 10) <= 10).length;
   const pct        = (occupied / 10) * 100;
   const levelClass = occupied >= 5 ? 'high' : occupied >= 4 ? 'warn' : 'ok';
 
@@ -1399,7 +1442,7 @@ function renderKennels(bookings, cleanings, kennels) {
 
     const cell = document.createElement('div');
     cell.className = 'kennel-cell ' + display;
-    cell.innerHTML = `<div class="k-num">K${k}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
+    cell.innerHTML = `<div class="k-num">${kLabel(k)}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
 
     if (isDirty && !isActive) {
       // Target the pending cleaning driving the dirty state — the one whose booking
@@ -1463,7 +1506,7 @@ function renderKennelDetails(bookings) {
       const t   = b.check_out_time ? fmtTime(b.check_out_time) : 'TBD';
       const os  = b.notes && b.notes.toLowerCase().includes('off-site') ? ' <span class="badge badge-purple">Off-site</span>' : '';
       html += `<div class="today-row">
-        <div class="today-row-left">🔴 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${t}${os}</span></div>
+        <div class="today-row-left">🔴 <strong>${b.dog_name}</strong>${isCatBooking(b) ? ' 🐈' : ''} ${kLabel(b.kennel_number)} <span class="today-meta">${t}${os}</span></div>
         <button class="btn btn-sm btn-danger" onclick="openLogCheckout(${JSON.stringify(b).split('"').join("'")})">Check out</button>
       </div>`;
     });
@@ -1479,7 +1522,7 @@ function renderKennelDetails(bookings) {
       const t   = b.check_in_time ? fmtTime(b.check_in_time) : 'TBD';
       const osp = b.off_site_pickup ? ' <span class="badge badge-purple">Off-site pickup</span>' : '';
       html += `<div class="today-row">
-        <div class="today-row-left">🟢 <strong>${b.dog_name}</strong> K${b.kennel_number} <span class="today-meta">${t}${osp}</span></div>
+        <div class="today-row-left">🟢 <strong>${b.dog_name}</strong>${isCatBooking(b) ? ' 🐈' : ''} ${kLabel(b.kennel_number)} <span class="today-meta">${t}${osp}</span></div>
         <button class="btn btn-sm btn-success" onclick="openLogCheckin(${JSON.stringify(b).split('"').join("'")})">Check in</button>
       </div>`;
     });
@@ -1491,8 +1534,8 @@ function renderKennelDetails(bookings) {
   // Check-Ins/Outs Tomorrow — always shown
   html += '<div class="kd-section"><div class="kd-label">Check-Ins/Outs Tomorrow</div>';
   if (tmrOuts.length || tmrIns.length) {
-    tmrOuts.forEach(b => { html += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🔴 ${b.dog_name} checkout — K${b.kennel_number}</div></div>`; });
-    tmrIns.forEach(b  => { html += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🟢 ${b.dog_name} check-in — K${b.kennel_number}</div></div>`; });
+    tmrOuts.forEach(b => { html += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🔴 ${b.dog_name} checkout — ${kLabel(b.kennel_number)}</div></div>`; });
+    tmrIns.forEach(b  => { html += `<div class="today-row"><div class="today-row-left" style="color:#94a3b8">🟢 ${b.dog_name} check-in — ${kLabel(b.kennel_number)}</div></div>`; });
   } else {
     html += '<div style="font-size:0.8rem;color:#94a3b8;padding:0.15rem 0">None</div>';
   }
@@ -1558,7 +1601,7 @@ function renderCleanings(cleanings) {
       ? `<br><span style="color:${noteColor};font-size:0.72rem;font-weight:${isRed ? '600' : '400'}">Next check-in ${fmtDate(c._next_checkin)}</span>`
       : '';
     html += `<tr style="${rowStyle}">
-      <td><strong>K${c.kennel_number}</strong></td>
+      <td><strong>${kLabel(c.kennel_number)}</strong></td>
       <td>${typeLabel}</td>
       <td>${dateCell}</td>
       <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}${c.notes ? '<br><em>' + c.notes + '</em>' : ''}${warnNote}</td>
@@ -1577,7 +1620,7 @@ function invRowHtml(i) {
   return `<div class="inv-row" style="cursor:pointer" onclick="openInvoiceDetail('${i.id}')"
       onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
     <div style="flex:1;min-width:0">
-      <div style="font-size:0.875rem"><strong>${b ? b.dog_name : '?'}</strong> K${b ? b.kennel_number : '?'}</div>
+      <div style="font-size:0.875rem"><strong>${b ? b.dog_name : '?'}</strong> ${b ? kLabel(b.kennel_number) : '?'}</div>
       <div style="font-size:0.75rem;color:#94a3b8;margin-top:0.1rem">
         ${i.days_billed} day${i.days_billed!==1?'s':''}${i.weeks_billed?` (${i.weeks_billed} wk)`:''} · ${fmtDate(i.invoice_date)}
         ${b?.off_site_pickup?' · <span class="badge badge-purple" style="font-size:0.6rem">🚗 Pickup</span>':''}
@@ -1622,7 +1665,7 @@ function renderInvoices(invoices, bookings) {
   if (niGroups.length || pendGroups.length) {
     niGroups.forEach(g => {
       const dogs = g.items.map(b => b.dog_name).join(', ');
-      const kn = [...new Set(g.items.map(b => 'K' + b.kennel_number))].join(', ');
+      const kn = [...new Set(g.items.map(b => kLabel(b.kennel_number)))].join(', ');
       html += `<div class="inv-row">
         <div style="flex:1;min-width:0">
           <div style="font-size:0.875rem"><strong>${ownerOf(g.hh)}</strong></div>
@@ -2006,7 +2049,7 @@ function renderInvoicePage() {
       const anyI = invs[0];
       // Use the first invoice's booking for date display (all share dates within a group)
       const anyB = anyI.bookings || {};
-      const dogList = invs.map(i => `${i.bookings?.dog_name || '?'} (K${i.bookings?.kennel_number || '?'})`).join(' + ');
+      const dogList = invs.map(i => `${i.bookings?.dog_name || '?'} (${kLabel(i.bookings?.kennel_number)})`).join(' + ');
 
       // Status: if all sent → Sent; if all pending → Pending; else Mixed
       const allSent    = invs.every(i => i.status === 'sent');
@@ -2030,12 +2073,12 @@ function renderInvoicePage() {
       // Per-dog billing line (always show — even single-dog groups benefit from this)
       const perDogLines = invs.map(i => {
         const dn = i.bookings?.dog_name || '?';
-        const kn = i.bookings?.kennel_number || '?';
+        const kn = kLabel(i.bookings?.kennel_number);
         const sBadge = i.status === 'sent'
           ? '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem">Sent</span>'
           : '<span class="badge badge-yellow" style="font-size:0.6rem;margin-left:0.3rem">Pending</span>';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:0.2rem 0;font-size:0.82rem;color:#475569">
-          <span><strong>${dn}</strong> K${kn} — ${fmtBilling(i.days_billed, i.weeks_billed)}${sBadge}</span>
+          <span><strong>${dn}</strong> ${kLabel(kn)} — ${fmtBilling(i.days_billed, i.weeks_billed)}${sBadge}</span>
           <span style="display:flex;gap:0.25rem">
             ${i.status === 'pending' ? `<button class="btn btn-sm btn-secondary" onclick="markInvoiceSent('${i.id}')">Invoiced</button>` : ''}
             ${i.status !== 'paid'    ? `<button class="btn btn-sm btn-success"   onclick="markInvoicePaid('${i.id}')">Paid</button>` : ''}
@@ -2146,7 +2189,7 @@ async function renderHistoryPage() {
         : '—';
       html += `<tr>
         <td><strong>${b.dog_name}</strong></td>
-        <td>K${b.kennel_number}</td>
+        <td>${kLabel(b.kennel_number)}</td>
         <td style="white-space:nowrap">${b.check_in_date ? fmtDate(b.check_in_date) : '—'}${b.check_in_time ? ' ' + fmtTime(b.check_in_time) : ''}</td>
         <td style="white-space:nowrap">${fmtDate(b.check_out_date)}${b.check_out_time ? ' ' + fmtTime(b.check_out_time) : ''}</td>
         <td>${inv?.days_billed ?? '—'}</td>
@@ -2168,7 +2211,7 @@ function exportHistoryCSV() {
   const rows = _historyRows.map(b => {
     const inv = b.invoices?.[0] || {};
     return [
-      b.dog_name, 'K' + b.kennel_number,
+      b.dog_name, kLabel(b.kennel_number),
       b.check_in_date, b.check_in_time || '',
       b.check_out_date, b.check_out_time || '',
       inv.days_billed ?? '', inv.weeks_billed ?? '',
@@ -2226,63 +2269,255 @@ function openLogCheckinById(id) {
   if (b) openLogCheckin(b);
 }
 
+function bdEsc(v) { return v == null ? '' : String(v).replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+// Vaccination badge for an animal record, aware of the booking's end date.
+function bdVaxBadge(dog, checkOutDate) {
+  if (!dog) return '<span class="badge badge-gray" style="font-size:0.65rem">No record linked</span>';
+  const due = dog.vaccination_due_date;
+  if (!due) return '<span class="badge badge-gray" style="font-size:0.65rem">No vaccination on file</span>';
+  const td = todayStr();
+  if (due < td)  return `<span class="badge badge-red" style="font-size:0.65rem">Vaccination EXPIRED ${fmtDateY(due)}</span>`;
+  if (checkOutDate && due < checkOutDate)
+    return `<span class="badge badge-yellow" style="font-size:0.65rem">Expires ${fmtDateY(due)} — before this stay ends</span>`;
+  if (due <= addDaysStr(td, 30))
+    return `<span class="badge badge-yellow" style="font-size:0.65rem">Vaccination expires ${fmtDateY(due)}</span>`;
+  return `<span class="badge badge-green" style="font-size:0.65rem">Vaccination valid to ${fmtDateY(due)}</span>`;
+}
+
+// One card per animal on the booking: name, space, edit link, vaccination,
+// and the feeding / medication / notes pulled from its Dog (or Cat) Details.
+function bdAnimalCard(g) {
+  const dog  = g.dog_id ? (_dogs || []).find(d => d.id === g.dog_id) : null;
+  const cat  = isCatBooking(g) || isCatAnimal(dog);
+  const note = (label, val) => val
+    ? `<div class="bd-note-label">${label}</div><div class="bd-note">${bdEsc(val)}</div>`
+    : `<div class="bd-note-label">${label}</div><div class="bd-note-empty">None on file</div>`;
+  return `<div class="bd-animal">
+    <div class="bd-animal-head">
+      <span class="bd-animal-name">${cat ? '🐈' : '🐾'} ${bdEsc(g.dog_name)}</span>
+      <span class="badge badge-gray" style="font-size:0.68rem">${kLabel(g.kennel_number)}</span>
+      ${dog ? `<a class="bd-edit" onclick="closeModal();openDogPage('${dog.id}')">edit ${cat ? 'cat' : 'dog'} details</a>` : ''}
+    </div>
+    <div>${bdVaxBadge(dog, g.check_out_date)}</div>
+    ${note('Feeding instructions', dog && dog.feeding_instructions)}
+    ${note('Medication', dog && dog.medication_instructions)}
+    ${note('Notes', dog && dog.internal_notes)}
+  </div>`;
+}
+
+// The in-memory _dogs cache can be stale on the long text fields, so refresh the
+// animals on this booking straight from the DB and repaint the cards.
+async function bdRefreshAnimals(ids, bookingIds) {
+  if (!ids.length) return;
+  try {
+    const { data } = await db.from('dogs').select('*').in('id', ids);
+    if (!data) return;
+    data.forEach(fresh => {
+      const i = (_dogs || []).findIndex(d => d.id === fresh.id);
+      if (i >= 0) _dogs[i] = fresh; else _dogs.push(fresh);
+    });
+    const host = document.getElementById('bd-animals');
+    if (!host) return;
+    const group = bookingIds.map(id => _bookings.find(b => b.id === id)).filter(Boolean);
+    host.innerHTML = group.map(bdAnimalCard).join('');
+  } catch (e) { /* panel already shows the cached values */ }
+}
+
+// ── Booking details (opens when tapping a kennel/condo block) ─────────
+// Everything needed at the kennel door in one panel: owner, vaccination, dates
+// and times, and the feeding / notes from the animal's record — plus the two
+// buttons actually used every day (Check In, Check Out). Rarely-used editing
+// lives behind "Edit / Manage Booking".
 function openBookingChooser(bookingId) {
   const b = _bookings.find(x => x.id === bookingId);
   if (!b) return;
-  const k = b.kennel_number;
   const groupId = b.booking_group_id;
   const group = groupId ? _bookings.filter(x => x.booking_group_id === groupId) : [b];
+  const cat = isCatBooking(b);
+  const owner = b.household_id ? (_households || []).find(h => h.id === b.household_id) : null;
 
-  // Primary action depends on booking status
-  let primaryHTML = '';
-  let editHTML = '';
-  if (b.status === 'active') {
-    primaryHTML = `<button class="btn btn-primary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">✏ Edit / Manage Booking <span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;margin-top:0.15rem">change dates (incl. extend a past checkout), kennel, or check out</span></button>`;
-  } else if (b.status === 'pending') {
-    primaryHTML = `<button class="btn btn-success" onclick="closeModal();openLogCheckinById('${b.id}')" style="padding:1rem;font-size:0.95rem">🟢 Check In</button>`;
-    editHTML    = `<button class="btn btn-secondary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:0.75rem;text-align:left">✏ Edit booking (dates / kennel)</button>`;
-  } else if (b.status === 'completed') {
-    primaryHTML = `<button class="btn btn-primary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">📋 View booking / Invoice</button>`;
-  } else {
-    primaryHTML = `<button class="btn btn-secondary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:1rem;font-size:0.95rem">View booking</button>`;
+  const statusMap = {
+    pending:   ['badge-blue',  'Booked — not yet checked in'],
+    active:    ['badge-green', 'Checked in'],
+    completed: ['badge-gray',  'Completed'],
+    cancelled: ['badge-red',   'Cancelled'],
+  };
+  const [sCls, sLabel] = statusMap[b.status] || ['badge-gray', b.status || '—'];
+
+  const when = (d, t) => d
+    ? `${fmtDateY(d)}${t ? ' · ' + fmtTime(t) : ' · <span style="color:#94a3b8">time not set</span>'}`
+    : '—';
+  const nights = (b.check_in_date && b.check_out_date) ? diffDays(b.check_in_date, b.check_out_date) + 1 : null;
+
+  const ownerSec = `<div class="bd-sec">
+      <div class="bd-sec-title">Owner</div>
+      <div class="bd-line" style="gap:0.5rem">
+        <span style="font-weight:600">${owner ? bdEsc(owner.owner_name) : '<span style="color:#94a3b8">(no owner on file)</span>'}</span>
+        ${owner ? `<a class="bd-edit" onclick="closeModal();openEditCustomer('${owner.id}')">edit customer</a>` : ''}
+      </div>
+      ${owner && (owner.phone || owner.email)
+        ? `<div class="bd-sub">${[owner.phone, owner.email].filter(Boolean).map(bdEsc).join(' · ')}</div>` : ''}
+    </div>`;
+
+  const staySec = `<div class="bd-sec">
+      <div class="bd-sec-title">Stay</div>
+      <div class="bd-line"><span class="bd-key">From</span><span>${when(b.check_in_date, b.check_in_time)}</span></div>
+      <div class="bd-line"><span class="bd-key">To</span><span>${when(b.check_out_date, b.check_out_time)}</span></div>
+      ${nights ? `<div class="bd-sub">${nights} night${nights === 1 ? '' : 's'}${group.length > 1 ? ` · group booking (${group.length} ${cat ? 'animals' : 'dogs'})` : ''}</div>` : ''}
+      ${b.notes ? `<div class="bd-note-label">Booking notes</div><div class="bd-note">${bdEsc(b.notes)}</div>` : ''}
+    </div>`;
+
+  const animalsSec = `<div class="bd-sec">
+      <div class="bd-sec-title">${cat ? (group.length > 1 ? 'Cats' : 'Cat') : (group.length > 1 ? 'Dogs' : 'Dog')}</div>
+      <div id="bd-animals">${group.map(bdAnimalCard).join('')}</div>
+    </div>`;
+
+  // Actions — the two everyday ones first.
+  let actions = '';
+  if (b.status === 'pending') {
+    actions += `<button class="btn btn-success" onclick="closeModal();openLogCheckinById('${b.id}')" style="padding:0.85rem;font-size:0.95rem">🟢 Check In</button>`;
+  } else if (b.status === 'active') {
+    actions += `<button class="btn btn-danger" onclick="closeModal();openQuickCheckout('${b.id}')" style="padding:0.85rem;font-size:0.95rem">🔴 Check Out</button>`;
   }
+  actions += `<button class="btn btn-secondary" onclick="closeModal();openLogCheckoutById('${b.id}')" style="padding:0.7rem;text-align:center">✏ Edit / Manage Booking<span style="display:block;font-size:0.7rem;font-weight:400;color:#94a3b8;margin-top:0.1rem">dates, ${cat ? 'condo' : 'kennel'}, transfer, invoice items, billed days</span></button>`;
 
-  // One Dog Details entry per dog in the group (so multi-dog bookings give
-  // independent links — Buddy + Rex appear as separate options)
-  let dogsHTML = '';
-  group.forEach(g => {
-    if (g.dog_id) {
-      dogsHTML += `<button class="btn btn-secondary" onclick="closeModal();openDogPage('${g.dog_id}')" style="padding:0.75rem;text-align:left">🐕 ${g.dog_name} — dog details</button>`;
-    }
-  });
-
-  // Owner link (jumps to Customers page — future enhancement: open the
-  // specific household card scrolled into view)
-  let ownerHTML = '';
-  if (b.household_id) {
-    const owner = (_households || []).find(h => h.id === b.household_id);
-    ownerHTML = `<button class="btn btn-secondary" onclick="closeModal();switchTab('customers')" style="padding:0.75rem;text-align:left">👤 View owner${owner ? ': ' + owner.owner_name : ''}</button>`;
+  let minor = '';
+  if (b.status !== 'completed' && b.status !== 'cancelled') {
+    minor += `<button class="btn btn-secondary" onclick="cancelBooking('${b.id}')" style="color:#b45309;border-color:#fde68a" title="Stay was booked but called off — keeps a cancelled record">✕ Cancel${group.length > 1 ? ' (all ' + group.length + ')' : ''}</button>`;
   }
+  minor += `<button class="btn btn-secondary" onclick="deleteBooking('${b.id}')" style="color:#b91c1c;border-color:#fecaca" title="Entered in error — removes it entirely (not a cancellation)">🗑 Delete${group.length > 1 ? ' (all ' + group.length + ')' : ''}</button>`;
 
-  const titleSuffix = group.length > 1
-    ? ` — ${group.map(g => g.dog_name).join(' + ')}`
-    : ` — ${b.dog_name}`;
-  const cancelHTML = (b.status !== 'completed' && b.status !== 'cancelled')
-    ? `<button class="btn btn-secondary" onclick="cancelBooking('${b.id}')" style="padding:0.75rem;text-align:left;color:#b45309;border-color:#fde68a">✕ Cancel booking${group.length > 1 ? ' (all ' + group.length + ' dogs)' : ''}<span style="display:block;font-size:0.7rem;font-weight:400;color:#94a3b8;margin-top:0.15rem">Stay was booked but called off — keeps a cancelled record</span></button>`
-    : '';
-  const dangerHTML = `<button class="btn btn-secondary" onclick="deleteBooking('${b.id}')" style="padding:0.75rem;text-align:left;color:#b91c1c;border-color:#fecaca">🗑 Delete booking${group.length > 1 ? ' (all ' + group.length + ' dogs)' : ''}<span style="display:block;font-size:0.7rem;font-weight:400;color:#94a3b8;margin-top:0.15rem">Entered in error — removes it entirely (not a cancellation)</span></button>`;
+  const body = `<div style="margin-bottom:0.5rem"><span class="badge ${sCls}">${sLabel}</span></div>
+    ${ownerSec}
+    ${staySec}
+    ${animalsSec}
+    <div class="bd-actions">${actions}</div>
+    <div class="bd-minor">${minor}</div>`;
 
-  const body = `<div style="display:flex;flex-direction:column;gap:0.5rem">
-    ${primaryHTML}
-    ${editHTML}
-    ${dogsHTML}
-    ${ownerHTML}
-    ${cancelHTML}
-    ${dangerHTML}
-  </div>`;
-
-  openModal('K' + k + titleSuffix, body, null);
+  const names = group.map(g => g.dog_name).join(' + ');
+  openModal(`${names} — ${kLabel(b.kennel_number)}`, body, null);
   document.getElementById('modal-footer').innerHTML = '<button class="btn btn-secondary" onclick="closeModal()">Close</button>';
+
+  bdRefreshAnimals(group.map(g => g.dog_id).filter(Boolean), group.map(g => g.id));
+}
+
+// ── Quick check-out ───────────────────────────────────────────────────
+// Small dialog: adjust the time, tick any surcharges, check out. Runs exactly
+// the same logic as the Manage Booking check-out (invoice + cleaning + group
+// cascade) by reusing manageBookingCheckout, with the fields it doesn't show
+// carried through as hidden inputs holding the booking's current values.
+function openQuickCheckout(bookingId) {
+  const b = _bookings.find(x => x.id === bookingId);
+  if (!b) { showToast('Booking not found', 'error'); return; }
+  const inv = (_invoices || []).find(x => x.booking_id === b.id) || null;
+  const group = b.booking_group_id
+    ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled')
+    : [b];
+  const nowTime = new Date().toTimeString().slice(0, 5);
+
+  const groupNote = group.length > 1
+    ? `<div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
+         <strong>Group booking</strong> — this checks out all ${group.length}: ${group.map(g => g.dog_name).join(' + ')}.
+       </div>` : '';
+
+  const body = groupNote + `
+    <div class="form-row-2">
+      <div class="form-field"><label>Check-out date</label><input type="date" id="f-out-date" value="${b.check_out_date || todayStr()}"></div>
+      <div class="form-field"><label>Check-out time *</label><input type="time" id="f-out-time" value="${b.check_out_time ? b.check_out_time.slice(0,5) : nowTime}"></div>
+    </div>
+    <div class="form-field">
+      <div class="form-check"><input type="checkbox" id="f-offsite" ${inv?.off_site_delivery?'checked':''}><label for="f-offsite">🚗 Off-site delivery (dropping ${isCatBooking(b) ? 'cat' : 'dog'} off)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-outside" ${inv?.outside_window_pickup?'checked':''}><label for="f-outside">🕐 Outside Hours Pickup</label></div>
+      <div class="form-check"><input type="checkbox" id="f-dropoff" ${inv?.outside_hours_dropoff?'checked':''}><label for="f-dropoff">🕐 Outside Hours Drop-off</label></div>
+    </div>
+    <div style="font-size:0.74rem;color:#64748b">Changing dates, ${isCatBooking(b) ? 'condos' : 'kennels'}, store purchases or billed days? Use <strong>Edit / Manage Booking</strong> instead.</div>
+    <div style="display:none">
+      <input type="date" id="f-in-date" value="${b.check_in_date || ''}">
+      <input type="time" id="f-in-time" value="${b.check_in_time ? b.check_in_time.slice(0,5) : ''}">
+      <input type="checkbox" id="f-pickup" ${b.off_site_pickup ? 'checked' : ''}>
+      <input type="checkbox" id="f-compassionate" ${b.compassionate_care ? 'checked' : ''}>
+      <input type="checkbox" id="f-dogpound" ${b.dog_pound ? 'checked' : ''}>
+      <input type="checkbox" id="f-grace">
+    </div>`;
+
+  openModal('Check Out: ' + b.dog_name + ' — ' + kLabel(b.kennel_number), body, null);
+  document.getElementById('modal-footer').innerHTML = `
+    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    <button class="btn btn-danger" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">🔴 Check Out</button>`;
+}
+
+// ── SPACES: dog kennels, VIP, and the Cat Condo ───────────────────────
+// kennel_number encodes every bookable space:
+//   1–10  dog kennels        11  VIP kennel
+//   12–17 individual cat condos  L1 L2 L3 R1 R2 R3
+//   18/19 a WHOLE SIDE of the cat condo (Left / Right). A side booking
+//         occupies all three condos on that side, so overlap checks and the
+//         calendar expand 18 → [12,13,14] and 19 → [15,16,17] via spaceUnits().
+const DOG_KENNEL_NUMS = [1,2,3,4,5,6,7,8,9,10];
+const VIP_KENNEL      = 11;
+const CAT_CONDO_NUMS  = [12,13,14,15,16,17];
+const CAT_CONDO_LABEL = {12:'L1',13:'L2',14:'L3',15:'R1',16:'R2',17:'R3'};
+const CAT_SIDE_LEFT   = 18;
+const CAT_SIDE_RIGHT  = 19;
+const CAT_SIDE_UNITS  = {18:[12,13,14], 19:[15,16,17]};
+const ALL_SPACE_NUMS  = [...DOG_KENNEL_NUMS, VIP_KENNEL, ...CAT_CONDO_NUMS, CAT_SIDE_LEFT, CAT_SIDE_RIGHT];
+
+function isCatSpace(n)   { n = parseInt(n, 10); return n >= 12 && n <= 19; }
+function isCatBooking(b) { return !!b && isCatSpace(b.kennel_number); }
+function isCatAnimal(d)  { return !!d && d.species === 'cat'; }
+// The condo(s) a space physically occupies. Everything except a whole side is itself.
+function spaceUnits(n)   { n = parseInt(n, 10); return CAT_SIDE_UNITS[n] || [n]; }
+// True when two spaces can't be occupied at the same time (Left vs L2, etc.)
+function spacesOverlap(a, b) {
+  const ua = spaceUnits(a);
+  return spaceUnits(b).some(u => ua.indexOf(u) !== -1);
+}
+// Short display label for any space. K1…K10, VIP, L1…R3, Cat Left / Cat Right.
+function kLabel(n) {
+  const v = parseInt(n, 10);
+  if (isNaN(v)) return '—';
+  if (v === VIP_KENNEL)     return 'VIP';
+  if (v === CAT_SIDE_LEFT)  return 'Cat Left';
+  if (v === CAT_SIDE_RIGHT) return 'Cat Right';
+  if (CAT_CONDO_LABEL[v])   return 'Condo ' + CAT_CONDO_LABEL[v];
+  return 'K' + v;
+}
+// Compact label for calendar column headers / tight badges
+function kLabelShort(n) {
+  const v = parseInt(n, 10);
+  if (isNaN(v)) return '—';
+  if (v === VIP_KENNEL)     return 'VIP';
+  if (v === CAT_SIDE_LEFT)  return 'Left';
+  if (v === CAT_SIDE_RIGHT) return 'Right';
+  if (CAT_CONDO_LABEL[v])   return CAT_CONDO_LABEL[v];
+  return 'K' + v;
+}
+// Cat condo <option> list — whole sides first (the usual booking), then singles.
+function catOptionList(selected) {
+  const sel = parseInt(selected, 10);
+  const opts = [
+    `<option value="18" ${sel === 18 ? 'selected' : ''}>Left side (L1–L3)</option>`,
+    `<option value="19" ${sel === 19 ? 'selected' : ''}>Right side (R1–R3)</option>`,
+  ];
+  CAT_CONDO_NUMS.forEach(n => {
+    opts.push(`<option value="${n}" ${sel === n ? 'selected' : ''}>${CAT_CONDO_LABEL[n]} only</option>`);
+  });
+  return opts.join('');
+}
+// Picks the right list for whatever space the booking is currently in.
+function spaceOptionList(selected) {
+  return isCatSpace(selected) ? catOptionList(selected) : kennelOptionList(selected);
+}
+// Bookings (non-cancelled) that physically clash with `space` over a date range.
+function spaceConflicts(space, startStr, endStr, excludeIds) {
+  const skip = new Set(excludeIds || []);
+  return (_bookings || []).filter(b =>
+    !skip.has(b.id) &&
+    (b.status === 'active' || b.status === 'pending') &&
+    spacesOverlap(b.kennel_number, space) &&
+    datesOverlap(b.check_in_date, b.check_out_date, startStr, endStr)
+  );
 }
 
 // ── Booking move helpers (per-dog kennel edit + warn-and-swap) ─────────
@@ -2292,7 +2527,7 @@ function openBookingChooser(bookingId) {
 function kennelOptionList(selectedKennel, { includeVip = true } = {}) {
   const opts = [];
   for (let i = 1; i <= 10; i++) {
-    opts.push(`<option value="${i}" ${i === selectedKennel ? 'selected' : ''}>K${i}</option>`);
+    opts.push(`<option value="${i}" ${i === selectedKennel ? 'selected' : ''}>${kLabel(i)}</option>`);
   }
   if (includeVip || selectedKennel === 11) {
     opts.push(`<option value="11" ${selectedKennel === 11 ? 'selected' : ''}>VIP</option>`);
@@ -2301,7 +2536,7 @@ function kennelOptionList(selectedKennel, { includeVip = true } = {}) {
 }
 
 function mbKennelOptions(selectedKennel) {
-  return kennelOptionList(selectedKennel);
+  return spaceOptionList(selectedKennel);
 }
 
 function mbDogKennelRow(b) {
@@ -2346,7 +2581,7 @@ function planBookingMoves(group, edits, newInDate, newOutDate, allBookings) {
     if (conflicts.length === 0) continue;
 
     if (conflicts.length > 1) {
-      blocked.push(`K${e.newKennel} has ${conflicts.length} other bookings overlapping (${conflicts.map(c => c.dog_name).join(', ')}). Move one of them first.`);
+      blocked.push(`${kLabel(e.newKennel)} has ${conflicts.length} other bookings overlapping (${conflicts.map(c => c.dog_name).join(', ')}). Move one of them first.`);
       continue;
     }
 
@@ -2362,7 +2597,7 @@ function planBookingMoves(group, edits, newInDate, newOutDate, allBookings) {
     );
 
     if (swapTargetConflicts.length > 0) {
-      blocked.push(`Can't swap ${conflict.dog_name} from K${e.newKennel} to K${e.oldKennel} — K${e.oldKennel} would conflict with ${swapTargetConflicts.map(x => x.dog_name).join(', ')}.`);
+      blocked.push(`Can't swap ${conflict.dog_name} from ${kLabel(e.newKennel)} to ${kLabel(e.oldKennel)} — ${kLabel(e.oldKennel)} would conflict with ${swapTargetConflicts.map(x => x.dog_name).join(', ')}.`);
       continue;
     }
 
@@ -2495,7 +2730,7 @@ async function manageBookingSave(bookingId) {
         return;
       }
       if (plan.ok === 'swap') {
-        const lines = plan.swaps.map(s => `• ${s.dogName}: K${s.fromKennel} → K${s.toKennel}`).join('\n');
+        const lines = plan.swaps.map(s => `• ${s.dogName}: ${kLabel(s.fromKennel)} → ${kLabel(s.toKennel)}`).join('\n');
         const ok = confirm(`Kennel conflict — these bookings would need to swap into the kennels you're vacating:\n\n${lines}\n\nProceed with swap?`);
         if (!ok) { btn.disabled = false; btn.textContent = 'Save'; return; }
         swapPlan = plan.swaps;
@@ -2743,14 +2978,15 @@ function toggleGraceNotes(cb) {
 function openTransferKennel(bookingId) {
   const b = _bookings.find(x => x.id === bookingId);
   if (!b) { showToast('Booking not found', 'error'); return; }
-  const curLabel = b.kennel_number === 11 ? 'VIP' : 'K' + b.kennel_number;
+  const curLabel = kLabel(b.kennel_number);
   // Default transfer date: today if the stay is underway, else the check-in date.
   const today = todayStr();
   const defDate = (b.check_in_date && b.check_in_date > today) ? b.check_in_date
                 : (b.check_out_date && b.check_out_date < today) ? b.check_out_date
                 : today;
   // Target kennel options exclude the current kennel.
-  const targetOpts = kennelOptionList(null)
+  // A cat transfers between condos, a dog between kennels.
+  const targetOpts = (isCatBooking(b) ? catOptionList(null) : kennelOptionList(null))
     .replace(`<option value="${b.kennel_number}" >`, `<option value="${b.kennel_number}" disabled>`);
   const body = `
     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:#1d4ed8">
@@ -2787,7 +3023,7 @@ async function doTransferKennel(bookingId) {
 
     const oldKennel = b.kennel_number;
     const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0,10); };
-    const kLabel = n => n === 11 ? 'VIP' : 'K' + n;
+    
 
     // Is the target kennel already occupied by a live booking that overlaps the moving
     // booking's window? If so we swap (or, for a split, block) rather than silently stack.
@@ -2840,7 +3076,7 @@ async function doTransferKennel(bookingId) {
     // Past split → old-kennel segment is done (completed). Future split → still
     // upcoming (pending), so the auto-scheduler provisions its cleaning.
     const histStatus = lastNightOld < todayStr() ? 'completed' : 'pending';
-    const histNote = `Transferred to ${newKennel === 11 ? 'VIP' : 'K' + newKennel} on ${D} — days in ${oldKennel === 11 ? 'VIP' : 'K' + oldKennel}`;
+    const histNote = `Transferred to ${kLabel(newKennel)} on ${D} — days in ${kLabel(oldKennel)}`;
     const { data: hist, error: histErr } = await db.from('bookings').insert({
       dog_name: b.dog_name,
       dog_id: b.dog_id || null,
@@ -2856,7 +3092,7 @@ async function doTransferKennel(bookingId) {
     if (histErr) throw histErr;
 
     // Continuing segment → new kennel from D.
-    const contNote = (b.notes ? b.notes + ' · ' : '') + `Transferred from ${oldKennel === 11 ? 'VIP' : 'K' + oldKennel} on ${D} (full stay began ${b.check_in_date})`;
+    const contNote = (b.notes ? b.notes + ' · ' : '') + `Transferred from ${kLabel(oldKennel)} on ${D} (full stay began ${b.check_in_date})`;
     const { error: contErr } = await db.from('bookings')
       .update({ kennel_number: newKennel, check_in_date: D, notes: contNote, updated_at: new Date().toISOString() })
       .eq('id', b.id);
@@ -2874,7 +3110,7 @@ async function doTransferKennel(bookingId) {
         await db.from('cleanings').insert({
           kennel_number: oldKennel,
           type: 'full',
-          reason: `Post-transfer: ${b.dog_name} left ${oldKennel === 11 ? 'VIP' : 'K' + oldKennel} (${D})`,
+          reason: `Post-transfer: ${b.dog_name} left ${kLabel(oldKennel)} (${D})`,
           scheduled_date: D,
           status: 'pending',
           booking_id: hist.id,
@@ -2883,7 +3119,7 @@ async function doTransferKennel(bookingId) {
     }
 
     closeModal();
-    showToast(`${b.dog_name} transferred to ${newKennel === 11 ? 'VIP' : 'K' + newKennel} from ${fmtDate(D)}`);
+    showToast(`${b.dog_name} transferred to ${kLabel(newKennel)} from ${fmtDate(D)}`);
     await loadAll();
   } catch (e) {
     showToast(e.message || 'Error transferring', 'error');
@@ -2944,7 +3180,7 @@ function openLogCheckin(booking) {
       const plan = planBookingMoves(group, edits, effectiveIn, effectiveOut, _bookings);
       if (plan.ok === false) throw new Error('Kennel conflict — ' + plan.reason);
       if (plan.ok === 'swap') {
-        const lines = plan.swaps.map(s => `• ${s.dogName}: K${s.fromKennel} → K${s.toKennel}`).join('\n');
+        const lines = plan.swaps.map(s => `• ${s.dogName}: ${kLabel(s.fromKennel)} → ${kLabel(s.toKennel)}`).join('\n');
         const okSwap = confirm(`Kennel conflict — swap?\n\n${lines}\n\nProceed?`);
         if (!okSwap) throw new Error('Cancelled by user');
         swapPlan = plan.swaps;
@@ -2983,7 +3219,7 @@ function openLogCheckin(booking) {
     closeModal();
     const label = group.length > 1
       ? `${group.length} dogs checked in: ${group.map(g => g.dog_name).join(' + ')}`
-      : `${b.dog_name} checked in to K${b.kennel_number}`;
+      : `${b.dog_name} checked in to ${kLabel(b.kennel_number)}`;
     showToast(label);
     await loadAll();
   }, 'Confirm Check-In');
@@ -2999,7 +3235,7 @@ function openVacantKennelModal(kennelNum) {
     <button class="btn btn-secondary" style="padding:1.25rem;font-size:0.875rem;height:auto;flex-direction:column;gap:0.25rem"
       onclick="closeModal();openBlockKennel(${kennelNum})">Block Off</button>
   </div>`;
-  openModal('K' + kennelNum + ' — Vacant', body, null);
+  openModal(kLabel(kennelNum) + ' — Vacant', body, null);
 }
 
 // ── Kennel-block management (date-ranged, single or all kennels) ──────
@@ -3009,15 +3245,20 @@ function openBlockKennel(kennelNum) {
   openAddKennelBlock(kennelNum);
 }
 
+// Blocks can be placed on any space, cat condos included.
+function blockSpaceOptionList(selected) {
+  return kennelOptionList(selected) + catOptionList(isCatSpace(selected) ? selected : null);
+}
+
 function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
-  const kennelOptions = kennelOptionList(defaultKennelNum);
+  const kennelOptions = blockSpaceOptionList(defaultKennelNum);
   const start = defaultStartDate || todayStr();
   const body = `
     <div class="form-row-2">
       <div class="form-field"><label>Apply to *</label>
         <select id="f-block-kennel">
           ${kennelOptions}
-          <option value="all" ${!defaultKennelNum ? 'selected' : ''}>All kennels</option>
+          <option value="all" ${!defaultKennelNum ? 'selected' : ''}>All kennels &amp; condos</option>
         </select>
       </div>
       <div class="form-field"><label>Reason *</label>
@@ -3058,7 +3299,7 @@ function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
 
     if (conflicts.length) {
       const lines = conflicts.slice(0, 10).map(b =>
-        `• ${b.dog_name} (K${b.kennel_number}) — ${fmtDate(b.check_in_date)} → ${fmtDate(b.check_out_date)} [${b.status}]`
+        `• ${b.dog_name} (${kLabel(b.kennel_number)}) — ${fmtDate(b.check_in_date)} → ${fmtDate(b.check_out_date)} [${b.status}]`
       ).join('\n');
       const extra = conflicts.length > 10 ? `\n…and ${conflicts.length - 10} more.` : '';
       const ok = confirm(`This block overlaps ${conflicts.length} existing booking${conflicts.length === 1 ? '' : 's'}:\n\n${lines}${extra}\n\nCreate the block anyway? You'll need to reschedule or cancel the overlapping bookings manually.`);
@@ -3071,7 +3312,7 @@ function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
     if (error) throw error;
 
     closeModal();
-    const where = kennelNum === null ? 'All kennels' : `K${kennelNum}`;
+    const where = kennelNum === null ? 'All kennels' : `${kLabel(kennelNum)}`;
     showToast(`${where} blocked off (${reason})`);
     await loadAll();
   }, 'Block off');
@@ -3095,7 +3336,7 @@ function openManageKennelBlocks(kennelNum) {
         : `From ${fmtDate(b.start_date)} (indefinite)`;
       const scopeBadge = isAll
         ? '<span class="badge badge-orange" style="font-size:0.6rem">All kennels</span>'
-        : `<span class="badge badge-gray" style="font-size:0.6rem">K${b.kennel_number}</span>`;
+        : `<span class="badge badge-gray" style="font-size:0.6rem">${kLabel(b.kennel_number)}</span>`;
       const activeNow = b.start_date <= td && (!b.end_date || b.end_date >= td);
       const stateBadge = activeNow
         ? '<span class="badge badge-red" style="font-size:0.6rem">Active</span>'
@@ -3116,25 +3357,25 @@ function openManageKennelBlocks(kennelNum) {
   }
 
   const body = `
-    <div style="font-size:0.85rem;color:#475569;margin-bottom:0.5rem">Blocks affecting K${kennelNum} (including any all-kennel blocks):</div>
+    <div style="font-size:0.85rem;color:#475569;margin-bottom:0.5rem">Blocks affecting ${kLabel(kennelNum)} (including any all-kennel blocks):</div>
     <div style="max-height:280px;overflow-y:auto">${listHtml}</div>
     <div style="margin-top:0.75rem;padding-top:0.5rem;border-top:1px solid #e2e8f0">
-      <button class="btn btn-primary" onclick="closeModal();openAddKennelBlock(${kennelNum})">+ Add block on K${kennelNum}</button>
+      <button class="btn btn-primary" onclick="closeModal();openAddKennelBlock(${kennelNum})">+ Add block on ${kLabel(kennelNum)}</button>
     </div>`;
-  openModal('K' + kennelNum + ' — Blocks', body, null);
+  openModal(kLabel(kennelNum) + ' — Blocks', body, null);
   document.getElementById('modal-footer').innerHTML = '<button class="btn btn-secondary" onclick="closeModal()">Close</button>';
 }
 
 function openEditKennelBlock(blockId) {
   const b = (_kennelBlocks || []).find(x => x.id === blockId);
   if (!b) { showToast('Block not found', 'error'); return; }
-  const kennelOptions = kennelOptionList(b.kennel_number);
+  const kennelOptions = blockSpaceOptionList(b.kennel_number);
   const body = `
     <div class="form-row-2">
       <div class="form-field"><label>Apply to *</label>
         <select id="f-block-kennel">
           ${kennelOptions}
-          <option value="all" ${b.kennel_number === null ? 'selected' : ''}>All kennels</option>
+          <option value="all" ${b.kennel_number === null ? 'selected' : ''}>All kennels &amp; condos</option>
         </select>
       </div>
       <div class="form-field"><label>Reason *</label>
@@ -3173,7 +3414,7 @@ function openEditKennelBlock(blockId) {
 async function deleteKennelBlock(blockId) {
   const b = (_kennelBlocks || []).find(x => x.id === blockId);
   if (!b) return;
-  const where = b.kennel_number === null ? 'all kennels' : `K${b.kennel_number}`;
+  const where = b.kennel_number === null ? 'all kennels' : `${kLabel(b.kennel_number)}`;
   if (!confirm(`Delete this block on ${where} (${b.reason})?`)) return;
   const { error } = await db.from('kennel_blocks').delete().eq('id', blockId);
   if (error) { showToast(error.message, 'error'); return; }
@@ -3292,25 +3533,56 @@ function ownerPickerInit(id, opts = {}) {
 const MAX_DOGS_PER_BOOKING = 4;
 let _addBookingRows = 0;
 
+// True while the Add Booking modal is in cat mode (Cat Condo instead of kennels).
+let _abIsCat = false;
+
 function abKennelOptions(defaultKennel) {
-  return kennelOptionList(defaultKennel);
+  return _abIsCat ? catOptionList(defaultKennel) : kennelOptionList(defaultKennel);
+}
+
+// Flip the whole Add Booking form between dogs (kennels K1–K10 / VIP) and cats
+// (Cat Condo: a whole side, or a single condo). Re-labels the rows, swaps every
+// space dropdown, and re-points the name typeahead at the other species.
+function abToggleCat(on) {
+  _abIsCat = !!on;
+  const title = document.getElementById('ab-animals-title');
+  if (title) title.textContent = (_abIsCat ? 'Cats' : 'Dogs') + ` (1–${MAX_DOGS_PER_BOOKING})`;
+  const addBtn = document.getElementById('ab-add-dog-btn');
+  if (addBtn) addBtn.textContent = _abIsCat ? '+ Add another cat' : '+ Add another dog';
+  document.querySelectorAll('.ab-dog-row').forEach((row, i) => {
+    const sel = row.querySelector('.ab-dog-kennel');
+    const cur = parseInt(sel.value, 10);
+    sel.innerHTML = _abIsCat
+      ? catOptionList(isCatSpace(cur) ? cur : CAT_SIDE_LEFT)
+      : kennelOptionList(isCatSpace(cur) ? 1 : cur);
+    const nameLbl = row.querySelector('.ab-name-label');
+    if (nameLbl) nameLbl.textContent = `${_abIsCat ? 'Cat' : 'Dog'} ${i + 1}${i === 0 ? ' *' : ''}`;
+    const spaceLbl = row.querySelector('.ab-space-label');
+    if (spaceLbl) spaceLbl.textContent = `${_abIsCat ? 'Cat condo' : 'Kennel'}${i === 0 ? ' *' : ''}`;
+    const nameInput = row.querySelector('.ab-dog-name');
+    if (nameInput) {
+      nameInput.placeholder = i === 0 ? (_abIsCat ? 'e.g. Pumba' : 'e.g. Buddy') : '(optional)';
+      nameInput.value = ''; row.querySelector('.ab-dog-id').value = '';
+    }
+  });
+  abValidateVax();
 }
 
 function abDogRow(idx, defaultKennel = null) {
   return `
     <div class="form-row-2 ab-dog-row" data-row="${idx}" style="margin-bottom:0.5rem">
-      <div class="form-field" style="position:relative"><label>Dog ${idx + 1} ${idx === 0 ? '*' : ''}</label>
-        <input type="text" class="ab-dog-name" placeholder="${idx === 0 ? 'e.g. Buddy' : '(optional)'}" autocomplete="off">
+      <div class="form-field" style="position:relative"><label class="ab-name-label">${_abIsCat ? 'Cat' : 'Dog'} ${idx + 1} ${idx === 0 ? '*' : ''}</label>
+        <input type="text" class="ab-dog-name" placeholder="${idx === 0 ? (_abIsCat ? 'e.g. Pumba' : 'e.g. Buddy') : '(optional)'}" autocomplete="off">
         <input type="hidden" class="ab-dog-id">
         <div class="ab-dog-dropdown"
              style="display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #cbd5e1;border-radius:6px;max-height:240px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
         <div class="ab-vax-warn" style="display:none;color:#dc2626;font-size:0.72rem;font-weight:600;margin-top:0.2rem"></div>
       </div>
-      <div class="form-field"><label>Kennel ${idx === 0 ? '*' : ''}</label>
+      <div class="form-field"><label class="ab-space-label">${_abIsCat ? 'Cat condo' : 'Kennel'} ${idx === 0 ? '*' : ''}</label>
         <div style="display:flex;gap:0.3rem;align-items:flex-start">
           <select class="ab-dog-kennel" style="flex:1">${abKennelOptions(defaultKennel)}</select>
           ${idx > 0
-            ? `<button type="button" class="btn-icon" onclick="abRemoveDog(${idx})" title="Remove this dog" style="height:36px">✕</button>`
+            ? `<button type="button" class="btn-icon" onclick="abRemoveDog(${idx})" title="Remove this animal" style="height:36px">✕</button>`
             : ''}
         </div>
       </div>
@@ -3361,17 +3633,17 @@ function abInitDogPicker(row) {
   function render() {
     const q = input.value.trim().toLowerCase();
     const hhId = getHouseholdId();
-    let dogs = (_dogs || []).filter(d => d.household_id === hhId && !d.archived);
+    let dogs = (_dogs || []).filter(d => d.household_id === hhId && !d.archived && isCatAnimal(d) === _abIsCat);
     if (q) dogs = dogs.filter(d => (d.name || '').toLowerCase().includes(q));
     dogs.sort((a, b) => a.name.localeCompare(b.name));
     const exact = q && dogs.find(d => (d.name || '').toLowerCase() === q);
 
     let html = '';
     if (!hhId) {
-      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">Pick an owner first to see saved dogs</div>`;
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">Pick an owner first to see saved ${_abIsCat ? 'cats' : 'dogs'}</div>`;
     } else if (q && !exact) {
       html += `<div class="dp-add" style="padding:0.5rem 0.75rem;border-bottom:1px solid #e2e8f0;cursor:pointer;color:#1d4ed8;font-weight:500;background:#eff6ff">
-                 + Save as new dog: "${input.value.trim().replace(/</g,'&lt;')}"
+                 + Save as new ${_abIsCat ? 'cat' : 'dog'}: "${input.value.trim().replace(/</g,'&lt;')}"
                </div>`;
     }
     dogs.slice(0, 20).forEach(d => {
@@ -3399,7 +3671,7 @@ function abInitDogPicker(row) {
                </div>`;
     });
     if (hhId && !dogs.length && !q) {
-      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">No saved dogs yet — type a name</div>`;
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">No saved ${_abIsCat ? 'cats' : 'dogs'} yet — type a name</div>`;
     }
     dropdown.innerHTML = html;
     dropdown.style.display = '';
@@ -3446,13 +3718,17 @@ function abRemoveDog(idx) {
 
 function openAddBooking(defaultKennel = null, defaultDate = null) {
   _addBookingRows = 0;
+  // Booking a cat condo cell in the calendar opens the form already in cat mode.
+  _abIsCat = isCatSpace(defaultKennel);
 
   const body = `
     <div class="form-field"><label>Owner</label>
       ${ownerPickerHTML('ab-owner', '', '')}
     </div>
 
-    <div style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.5rem 0 0.4rem">Dogs (1–${MAX_DOGS_PER_BOOKING})</div>
+    <div class="form-check" style="margin:0.35rem 0 0.5rem"><input type="checkbox" id="ab-is-cat" ${_abIsCat ? 'checked' : ''} onchange="abToggleCat(this.checked)"><label for="ab-is-cat">🐈 This is a cat booking (Cat Condo)</label></div>
+
+    <div id="ab-animals-title" style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em;margin:0.5rem 0 0.4rem">${_abIsCat ? 'Cats' : 'Dogs'} (1–${MAX_DOGS_PER_BOOKING})</div>
     <div id="ab-dogs-container"></div>
     <button type="button" id="ab-add-dog-btn" class="btn-add" onclick="abAddDog()" style="margin-bottom:0.75rem">+ Add another dog</button>
 
@@ -3465,7 +3741,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       <div class="form-field"><label>Check-out time</label><input type="time" id="f-cout-time"></div>
     </div>
     <div class="form-field">
-      <div class="form-check"><input type="checkbox" id="f-shared"><label for="f-shared">⚠ Shared kennel — owner insists (rare exception)</label></div>
+      <div class="form-check"><input type="checkbox" id="f-shared"><label for="f-shared">⚠ Shared kennel/condo — owner insists (rare exception)</label></div>
       <div class="form-check"><input type="checkbox" id="f-comp-new"><label for="f-comp-new">💙 Compassionate Care (no charge)</label></div>
       <div class="form-check"><input type="checkbox" id="f-dogpound-new"><label for="f-dogpound-new">🏛️ Dog Pound — Village of Fort Simpson</label></div>
     </div>
@@ -3491,9 +3767,24 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       kennel: parseInt(r.querySelector('.ab-dog-kennel').value),
     })).filter(d => d.name);
 
-    if (!dogs.length) throw new Error('At least one dog name is required');
+    if (!dogs.length) throw new Error(`At least one ${_abIsCat ? 'cat' : 'dog'} name is required`);
     if (!cinDate || !coutDate) throw new Error('Check-in and check-out dates are required');
     if (coutDate < cinDate) throw new Error('Check-out date cannot be before the check-in date');
+
+    // Cat condo: a whole side and its individual condos are the same physical
+    // space, so warn when the chosen space is already taken in this window.
+    const spaceWarnings = [];
+    for (const d of dogs) {
+      if (!isCatSpace(d.kennel)) continue;
+      const clash = spaceConflicts(d.kennel, cinDate, coutDate, []);
+      if (clash.length) {
+        spaceWarnings.push(`${kLabel(d.kennel)} (${d.name}) — already taken by ${clash.map(c => `${c.dog_name} in ${kLabel(c.kennel_number)}`).join(', ')}`);
+      }
+    }
+    if (spaceWarnings.length) {
+      const okSpace = confirm(`The cat condo you picked is already booked:\n\n${spaceWarnings.join('\n')}\n\nBook anyway?`);
+      if (!okSpace) throw new Error('Cancelled by user');
+    }
 
     // Warn if any chosen kennel is blocked during the booking window.
     // The user can still proceed — blocks are advisory, not enforced.
@@ -3505,7 +3796,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
           const range = b.end_date ? `${fmtDate(b.start_date)}→${fmtDate(b.end_date)}` : `from ${fmtDate(b.start_date)}, indefinite`;
           return `${b.reason} (${range})`;
         }).join('; ');
-        blockWarnings.push(`K${d.kennel} (${d.name}) — blocked: ${reasons}`);
+        blockWarnings.push(`${kLabel(d.kennel)} (${d.name}) — blocked: ${reasons}`);
       }
     }
     if (blockWarnings.length) {
@@ -3538,7 +3829,8 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       // silently linking to a hidden (archived) record.
       const match = (_dogs || []).find(x =>
         x.household_id === householdId &&
-        (x.name || '').toLowerCase() === d.name.toLowerCase()
+        (x.name || '').toLowerCase() === d.name.toLowerCase() &&
+        isCatAnimal(x) === _abIsCat
       );
       if (match) {
         d.dogId = match.id;
@@ -3551,7 +3843,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
 
       // Create a new dogs record
       const { data: newDog, error: dogErr } = await db.from('dogs')
-        .insert({ household_id: householdId, name: d.name })
+        .insert({ household_id: householdId, name: d.name, species: _abIsCat ? 'cat' : 'dog' })
         .select().single();
       if (dogErr) throw dogErr;
       d.dogId = newDog.id;
@@ -3614,8 +3906,8 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
 
     closeModal();
     const label = dogs.length === 1
-      ? `${dogs[0].name} → K${dogs[0].kennel}`
-      : `${dogs.length} dogs: ` + dogs.map(d => `${d.name} (K${d.kennel})`).join(', ');
+      ? `${dogs[0].name} → ${kLabel(dogs[0].kennel)}`
+      : `${dogs.length} ${_abIsCat ? 'cats' : 'dogs'}: ` + dogs.map(d => `${d.name} (${kLabel(d.kennel)})`).join(', ');
     showToast(`Booking added: ${label}`);
     await loadAll();
   });
@@ -3648,6 +3940,9 @@ let _kcExtending   = false; // re-entrancy guard while a scroll-triggered extend
 const KC_BACK_MONTHS  = 1; // months loaded before the focused month on open
 const KC_FWD_MONTHS   = 2; // months loaded after the focused month on open
 const KC_EXTEND_CHUNK = 2; // months added each time the user scrolls near an edge
+// Calendar columns: the 10 dog kennels, VIP, then the six cat condos. Whole-side
+// cat bookings (18/19) are drawn across their three condo columns.
+const KC_COLS = [...DOG_KENNEL_NUMS, VIP_KENNEL, ...CAT_CONDO_NUMS];
 
 function openKennelCalendar() {
   const t = new Date();
@@ -3810,13 +4105,18 @@ function renderKennelCalendar() {
     const isCancelled = b.status === 'cancelled';
     const occ = isCancelled ? occupancyCancelled : occupancy;
     const sos = isCancelled ? startOfStayCancelled : startOfStay;
+    // A whole-side cat booking fills all three condos on that side.
+    const units = spaceUnits(b.kennel_number);
     let first = true;
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const ds  = kcDateStr(d);
-      const key = `${b.kennel_number}|${ds}`;
-      if (!occ[key]) occ[key] = [];
-      occ[key].push(b);
-      if (first) { sos[`${b.kennel_number}|${b.id}`] = ds; first = false; }
+      units.forEach(u => {
+        const key = `${u}|${ds}`;
+        if (!occ[key]) occ[key] = [];
+        occ[key].push(b);
+        if (first) sos[`${u}|${b.id}`] = ds;
+      });
+      first = false;
     }
   });
   // Sort active cells so highest-status booking drives colour/click
@@ -3831,11 +4131,13 @@ function renderKennelCalendar() {
     const dateKey = (c.status === 'completed' && c.completed_date) ? c.completed_date : c.scheduled_date;
     if (!dateKey) return;
     if (dateKey < monthStart || dateKey > monthEnd) return;
-    const mapKey = `${c.kennel_number}|${dateKey}`;
-    // Prefer pending over completed if both land on same day/kennel
-    if (!cleaningMap[mapKey] || c.status !== 'completed') {
-      cleaningMap[mapKey] = c;
-    }
+    spaceUnits(c.kennel_number).forEach(u => {
+      const mapKey = `${u}|${dateKey}`;
+      // Prefer pending over completed if both land on same day/kennel
+      if (!cleaningMap[mapKey] || c.status !== 'completed') {
+        cleaningMap[mapKey] = c;
+      }
+    });
   });
 
   // Date-aware blocked-kennel check uses getKennelBlocksOn(k, dateStr) per cell.
@@ -3845,21 +4147,23 @@ function renderKennelCalendar() {
   // _calRangeEnd], with a month-divider row wherever a new month starts. The
   // ‹ Today › controls and label at the top scroll to / extend toward a target.
   let html = '<table class="kc-table"><thead><tr><th class="kc-corner kc-date-cell"></th>';
-  for (let k = 1; k <= 11; k++) html += `<th>${k === 11 ? 'VIP' : 'K' + k}</th>`;
+  KC_COLS.forEach(k => {
+    html += `<th class="${k === 12 ? 'kc-catsep ' : ''}${isCatSpace(k) ? 'kc-cat-col' : ''}">${kLabelShort(k)}</th>`;
+  });
   html += '</tr></thead><tbody>';
 
   for (let d = new Date(rangeStartD); d <= rangeEndLastDay; d.setDate(d.getDate() + 1)) {
     const ds = kcDateStr(d);
     if (d.getDate() === 1) {
       const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      html += `<tr class="kc-month-divider" data-month="${mKey}"><td colspan="12">${kcFmtMonth(d)}</td></tr>`;
+      html += `<tr class="kc-month-divider" data-month="${mKey}"><td colspan="${KC_COLS.length + 1}">${kcFmtMonth(d)}</td></tr>`;
     }
     const dow = d.getDay();
     const isWeekend = (dow === 0 || dow === 6);
     const isToday = (ds === today);
     html += `<tr class="${isToday ? 'kc-today' : ''}">`;
     html += `<td class="kc-date-cell${isWeekend ? ' kc-weekend' : ''}">${kcFmtRow(d)}</td>`;
-    for (let k = 1; k <= 11; k++) {
+    for (const k of KC_COLS) {
       const key     = `${k}|${ds}`;
       const bArr    = occupancy[key];
       const bCancArr = occupancyCancelled[key];
@@ -3867,6 +4171,8 @@ function renderKennelCalendar() {
       const bCanc = bCancArr ? bCancArr[0] : null; // primary cancelled booking
       const c = cleaningMap[key];
       let cls = 'kc-cell';
+      if (k === 12) cls += ' kc-catsep';
+      if (isCatSpace(k)) cls += ' kc-cat-col';
       let label = '';
       let attrs = '';
       if (b) {
@@ -3883,7 +4189,7 @@ function renderKennelCalendar() {
         const names = bArr.map(bk => bk.dog_name).join('+');
         label = showName ? `${names}${sharedFlag ? '<span class="kc-cell-shared" title="Shared kennel">⚠</span>' : ''}` : '·';
         const titleNames = bArr.map(bk => `${bk.dog_name} (${bk.status})`).join(', ');
-        attrs = `data-booking="${b.id}" title="K${k} — ${titleNames}"`;
+        attrs = `data-booking="${b.id}" title="${kLabel(k)} — ${titleNames}"`;
         // Cancelled booking overlay: small brown strip at the bottom of the cell
         if (bCanc) {
           const cShowName = bCancArr.some(bk => startOfStayCancelled[`${k}|${bk.id}`] === ds);
@@ -3900,20 +4206,20 @@ function renderKennelCalendar() {
         const cNames = bCancArr.map(bk => bk.dog_name).join('+');
         label = showName ? `<s>${cNames}</s>` : '·';
         const titleNames = bCancArr.map(bk => `${bk.dog_name} (cancelled)`).join(', ');
-        attrs = `title="K${k} — ${titleNames}"`;
+        attrs = `title="${kLabel(k)} — ${titleNames}"`;
       } else if (c) {
         // Cleaning on an otherwise-empty day
         if (c.status === 'completed') {
           // Completed cleaning — show as green history marker
           cls += ' kc-clean-done';
           label = '';
-          attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning completed ${fmtDate(c.completed_date || c.scheduled_date)}: ${c.reason || ''} (click to edit)"`;
+          attrs = `data-cleaning="${c.id}" title="${kLabel(k)} — Cleaning completed ${fmtDate(c.completed_date || c.scheduled_date)}: ${c.reason || ''} (click to edit)"`;
         } else {
           // Pending/scheduled cleaning — warning only when auto-scheduler flagged it
           cls += ' kc-clean-day';
           if (c.must_complete) cls += ' kc-clean-warning';
           label = '';
-          attrs = `data-cleaning="${c.id}" title="K${k} — Cleaning scheduled${c.must_complete ? ' (⚠ next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
+          attrs = `data-cleaning="${c.id}" title="${kLabel(k)} — Cleaning scheduled${c.must_complete ? ' (⚠ next check-in ' + fmtDate(c._next_checkin || '') + ')' : ''}"`;
         }
       } else if (getKennelBlocksOn(k, ds).length) {
         // Show the block reason inline instead of generic "Blocked" text
@@ -3923,7 +4229,7 @@ function renderKennelCalendar() {
         const allReasons = blocksHere.map(b => b.reason).join(' · ').replace(/"/g,'&quot;');
         cls += ' kc-blocked';
         label = reasonText;
-        attrs = `data-blocked="${k}" title="K${k} blocked: ${allReasons}"`;
+        attrs = `data-blocked="${k}" title="${kLabel(k)} blocked: ${allReasons}"`;
       } else {
         cls += ' kc-empty';
         label = '+';
@@ -4074,10 +4380,13 @@ function kcxBuildGridCsv(from, to, opts) {
     const endD   = b.check_out_date > to ? to : b.check_out_date;
     const start  = new Date(startD + 'T00:00:00');
     const end    = new Date(endD + 'T00:00:00');
+    const units = spaceUnits(b.kennel_number);
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const key = `${b.kennel_number}|${kcDateStr(d)}`;
-      if (!occ[key]) occ[key] = [];
-      occ[key].push(b);
+      units.forEach(u => {
+        const key = `${u}|${kcDateStr(d)}`;
+        if (!occ[key]) occ[key] = [];
+        occ[key].push(b);
+      });
     }
   });
 
@@ -4087,13 +4396,13 @@ function kcxBuildGridCsv(from, to, opts) {
     _cleanings.forEach(c => {
       if (!c.scheduled_date) return;
       if (c.scheduled_date < from || c.scheduled_date > to) return;
-      cleaningMap[`${c.kennel_number}|${c.scheduled_date}`] = c;
+      spaceUnits(c.kennel_number).forEach(u => { cleaningMap[`${u}|${c.scheduled_date}`] = c; });
     });
   }
 
   // Header
   const header = ['Date'];
-  for (let k = 1; k <= 11; k++) header.push(k === 11 ? 'VIP' : 'K' + k);
+  KC_COLS.forEach(k => header.push(kLabelShort(k)));
   const rows = [header];
 
   // Day-of-week formatter
@@ -4105,7 +4414,7 @@ function kcxBuildGridCsv(from, to, opts) {
     const ds = kcDateStr(d);
     const dateLabel = `${dow(d)} ${ds}`;
     const row = [dateLabel];
-    for (let k = 1; k <= 11; k++) {
+    for (const k of KC_COLS) {
       const arr = occ[`${k}|${ds}`];
       const cln = cleaningMap[`${k}|${ds}`];
       const blks = getKennelBlocksOn(k, ds);
@@ -4154,7 +4463,7 @@ function kcxBuildListCsv(from, to, opts) {
     const days = (b.check_in_date && b.check_out_date) ? Math.max(1, diffDays(b.check_in_date, b.check_out_date)) : '';
     rows.push([
       b.dog_name,
-      'K' + b.kennel_number,
+      kLabel(b.kennel_number),
       b.check_in_date || '',
       b.check_in_time ? b.check_in_time.slice(0,5) : '',
       b.check_out_date || '',
@@ -4232,9 +4541,9 @@ function renderCustomers() {
                       : `<span class="badge badge-green" style="margin-left:0.4rem">Vax ${fmtDate(due)}</span>`;
           const archTag = d.archived ? '<span class="badge badge-gray" style="margin-left:0.4rem;font-size:0.6rem">archived</span>' : '';
           const mergeLink = `<a style="margin-left:0.45rem;font-size:0.72rem;color:#7c3aed;cursor:pointer;text-decoration:none" title="Merge this dog into another record" onclick="event.stopPropagation();openMergeDog('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">merge</a>`;
-          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">🐾 <a style="color:#1d4ed8;font-weight:600;cursor:pointer;text-decoration:none" onclick="openDogPage('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">${d.name}</a>${dueBadge}${archTag}${mergeLink}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
+          return `<div style="font-size:0.82rem;color:#475569;margin-top:0.15rem">${isCatAnimal(d) ? '🐈' : '🐾'} <a style="color:#1d4ed8;font-weight:600;cursor:pointer;text-decoration:none" onclick="openDogPage('${d.id}')" onmouseenter="this.style.textDecoration='underline'" onmouseleave="this.style.textDecoration='none'">${d.name}</a>${dueBadge}${archTag}${mergeLink}${d.vaccination_status ? ` · ${d.vaccination_status}` : ''}${d.vaccination_notes ? `<div style="font-size:0.72rem;color:#94a3b8;margin-left:1.2rem">${d.vaccination_notes}</div>` : ''}</div>`;
         }).join('')
-      : '<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.15rem">No dogs on file</div>';
+      : '<div style="font-size:0.78rem;color:#94a3b8;margin-top:0.15rem">No animals on file</div>';
 
     const meta = [];
     if (h.phone) meta.push(`📞 ${h.phone}`);
@@ -4279,24 +4588,38 @@ function addDaysStr(dateStr, days) {
 // ============================================================
 // DOG PAGE
 // ============================================================
+// 'dog' or 'cat' — which of the two animal pages is currently showing. Dogs and
+// cats live in the same `dogs` table separated by the `species` column, so both
+// pages share renderDogsList / renderDogPage.
+let _speciesCtx = 'dog';
+function spCat()      { return _speciesCtx === 'cat'; }
+function spWord(cap)  { return cap ? (spCat() ? 'Cat' : 'Dog') : (spCat() ? 'cat' : 'dog'); }
+function spWords(cap) { return spWord(cap) + 's'; }
+function spIcon()     { return spCat() ? '🐈' : '🐾'; }
+function spBodyId()   { return spCat() ? 'cats-page-body' : 'dogs-page-body'; }
+
 async function openDogPage(dogId) {
+  const d = (_dogs || []).find(x => x.id === dogId);
+  _speciesCtx = isCatAnimal(d) ? 'cat' : 'dog';
   _currentDogId = dogId;
-  // Show the dogs view
-  switchTab('dogs');
+  switchTab(spCat() ? 'cats' : 'dogs');
   // switchTab already calls renderDogPage when _currentDogId is set
 }
 
 function renderDogsList() {
-  const body = document.getElementById('dogs-page-body');
-  const all = [..._dogs].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const body = document.getElementById(spBodyId());
+  if (!body) return;
+  const all = [..._dogs]
+    .filter(d => isCatAnimal(d) === spCat())
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   if (!all.length) {
-    body.innerHTML = '<div class="card"><div class="card-body"><div class="empty">No dogs on file yet. Add one from the Customers page.</div></div></div>';
+    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty">No ${spWords()} on file yet. Add one from the Customers page${spCat() ? ' (tick “Cat” on the animal row), or from a cat booking' : ''}.</div></div></div>`;
     return;
   }
   const archivedCount = all.filter(d => d.archived).length;
   const dogs = all.filter(d => _showArchivedDogs ? true : !d.archived);
   let html = `<div class="card">
-    <div class="card-header"><h2>Dogs</h2><span class="badge badge-gray">${dogs.length}</span></div>
+    <div class="card-header"><h2>${spWords(true)}</h2><span class="badge badge-gray">${dogs.length}</span></div>
     <div class="card-body">`;
   if (archivedCount) {
     html += `<div style="margin-bottom:0.5rem"><button class="btn btn-sm btn-secondary" onclick="toggleArchivedDogs()">${_showArchivedDogs ? 'Hide' : 'Show'} archived (${archivedCount})</button></div>`;
@@ -4317,11 +4640,12 @@ function renderDogsList() {
     html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.5rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;background:white${d.archived ? ';opacity:0.6' : ''}">
       <div style="flex:1;min-width:0;cursor:pointer" onclick="openDogPage('${d.id}')"
            onmouseenter="this.parentElement.style.background='#f8fafc'" onmouseleave="this.parentElement.style.background='white'">
-        <div style="font-weight:600;font-size:0.95rem">🐾 ${d.name}</div>
+        <div style="font-weight:600;font-size:0.95rem">${spIcon()} ${d.name}</div>
         <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner}</div>
       </div>
       ${dueBadge}${archBadge}
-      <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openMergeDog('${d.id}')" title="Merge this dog into another record">Merge…</button>
+      <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openRenameAnimal('${d.id}')" title="Fix a spelling or replace a temporary name">Rename…</button>
+      <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();openMergeDog('${d.id}')" title="Merge this record into another">Merge…</button>
       ${d.archived
         ? `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();archiveDog('${d.id}', false)">Unarchive</button>`
         : `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();archiveDog('${d.id}', true)" title="Hide from the active list">Archive</button>`}
@@ -4332,7 +4656,8 @@ function renderDogsList() {
 }
 
 async function renderDogPage() {
-  const body = document.getElementById('dogs-page-body');
+  const body = document.getElementById(spBodyId());
+  if (!body) return;
   const d = (_dogs || []).find(x => x.id === _currentDogId);
   if (!d) {
     _currentDogId = null;
@@ -4379,8 +4704,10 @@ async function renderDogPage() {
 
   let html = `
     <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap">
-      <button class="btn btn-sm btn-secondary" onclick="_currentDogId=null; renderDogsList()">← All dogs</button>
-      <button class="btn btn-sm btn-secondary" onclick="openMergeDog('${dog.id}')" title="Merge this dog into another record">⤵ Merge…</button>
+      <button class="btn btn-sm btn-secondary" onclick="_currentDogId=null; renderDogsList()">← All ${spWords()}</button>
+      <button class="btn btn-sm btn-secondary" onclick="openRenameAnimal('${dog.id}')" title="Fix a spelling or replace a temporary name">✏ Rename</button>
+      <button class="btn btn-sm btn-secondary" onclick="openMoveSpecies('${dog.id}')" title="This animal is on the wrong page">${dog.species === 'cat' ? '🐾 Move to Dogs' : '🐈 Move to Cats'}</button>
+      <button class="btn btn-sm btn-secondary" onclick="openMergeDog('${dog.id}')" title="Merge this record into another">⤵ Merge…</button>
       <button class="btn btn-sm btn-secondary" onclick="archiveDog('${dog.id}', ${dog.archived ? 'false' : 'true'})">${dog.archived ? 'Unarchive' : 'Archive'}</button>
       <span style="flex:1"></span>
       <button class="btn btn-sm btn-secondary" onclick="dogNav(-1)" ${hasPrev?'':'disabled'} title="Previous dog (same owner)">← Prev</button>
@@ -4389,7 +4716,7 @@ async function renderDogPage() {
 
     <div class="card" style="margin-bottom:0.75rem">
       <div class="card-header">
-        <h2 style="margin:0">🐾 ${dog.name}</h2>
+        <h2 style="margin:0">${dog.species === 'cat' ? '🐈' : '🐾'} ${dog.name}</h2>
         ${currentBadge}
       </div>
       <div class="card-body">
@@ -4401,7 +4728,7 @@ async function renderDogPage() {
         </div>
         <div class="form-field">
           <label>Feeding instructions ${PORTAL_TAG}</label>
-          <textarea id="dog-feeding" rows="3" placeholder="e.g. 1 cup kibble morning + evening, no chicken">${(dog.feeding_instructions || '').replace(/</g,'&lt;')}</textarea>
+          <textarea id="dog-feeding" rows="3" placeholder="${dog.species === 'cat' ? 'e.g. ½ tin wet food morning, dry topped up daily' : 'e.g. 1 cup kibble morning + evening, no chicken'}">${(dog.feeding_instructions || '').replace(/</g,'&lt;')}</textarea>
         </div>
         <div class="form-field">
           <label>Medication instructions ${PORTAL_TAG}</label>
@@ -4523,6 +4850,58 @@ async function saveDogFields(dogId) {
     dRef.internal_notes          = internal;
   }
   showToast('Saved');
+}
+
+// ── Rename an animal ─────────────────────────────────────────────────
+// Names are stored twice: dogs.name (the record) and bookings.dog_name (a copy
+// taken when the booking was made), so both are updated or old bookings would
+// keep showing the misspelling / temporary name.
+function openRenameAnimal(dogId) {
+  const d = (_dogs || []).find(x => x.id === dogId);
+  if (!d) { showToast('Record not found', 'error'); return; }
+  const cat = isCatAnimal(d);
+  const body = `
+    <div class="form-field">
+      <label>${cat ? 'Cat' : 'Dog'} name *</label>
+      <input type="text" id="ra-name" value="${(d.name || '').replace(/"/g, '&quot;')}" autocomplete="off">
+    </div>
+    <div style="font-size:0.75rem;color:#64748b">Updates this record and the name shown on every booking linked to it — past, current and upcoming.</div>`;
+  openModal('Rename ' + d.name, body, async () => {
+    const name = document.getElementById('ra-name').value.trim();
+    if (!name) throw new Error('A name is required');
+    if (name === d.name) { closeModal(); return; }
+    const { error } = await db.from('dogs').update({ name }).eq('id', dogId);
+    if (error) throw error;
+    const { error: bErr } = await db.from('bookings').update({ dog_name: name }).eq('dog_id', dogId);
+    if (bErr) throw bErr;
+    d.name = name;
+    closeModal();
+    showToast('Renamed to ' + name);
+    await loadAll();
+    if (_currentDogId === dogId) renderDogPage(); else renderDogsList();
+  }, 'Save name');
+}
+
+// Move a record between the Dogs and Cats pages (species flag only — bookings,
+// vaccination records and history all stay attached).
+function openMoveSpecies(dogId) {
+  const d = (_dogs || []).find(x => x.id === dogId);
+  if (!d) return;
+  const toCat = !isCatAnimal(d);
+  const body = `<div style="font-size:0.9rem;color:#334155;line-height:1.5">
+      Move <strong>${(d.name || '').replace(/</g, '&lt;')}</strong> to the <strong>${toCat ? 'Cats' : 'Dogs'}</strong> page?
+      <div style="font-size:0.8rem;color:#64748b;margin-top:0.5rem">Bookings, invoices and vaccination records stay attached. ${toCat ? 'Cats are booked into the Cat Condo instead of the kennels.' : ''}</div>
+    </div>`;
+  openModal('Move to ' + (toCat ? 'Cats' : 'Dogs'), body, async () => {
+    const { error } = await db.from('dogs').update({ species: toCat ? 'cat' : 'dog' }).eq('id', dogId);
+    if (error) throw error;
+    d.species = toCat ? 'cat' : 'dog';
+    _speciesCtx = toCat ? 'cat' : 'dog';
+    closeModal();
+    showToast(`${d.name} moved to ${toCat ? 'Cats' : 'Dogs'}`);
+    await loadAll();
+    switchTab(toCat ? 'cats' : 'dogs');
+  }, 'Move');
 }
 
 // ── Vaccination upload + lifecycle ───────────────────────────────────
@@ -4693,15 +5072,25 @@ function custDogRow(idx, dog = null) {
   const due   = dog?.vaccination_due_date || '';
   const notes = dog?.vaccination_notes || '';
   const id    = dog?.id || '';
+  const species = dog?.species || 'dog';
   return `
     <div class="cust-dog-row" data-row="${idx}" data-dog-id="${id}" style="border:1px solid #e2e8f0;border-radius:8px;padding:0.6rem;margin-bottom:0.5rem;background:#f8fafc">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
-        <span style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em">Dog ${idx + 1}</span>
-        <button type="button" class="btn-icon" onclick="custRemoveDog(${idx})" title="Remove dog">✕</button>
+        <span style="font-size:0.75rem;text-transform:uppercase;color:#64748b;letter-spacing:0.04em">Animal ${idx + 1}</span>
+        <button type="button" class="btn-icon" onclick="custRemoveDog(${idx})" title="Remove">✕</button>
       </div>
       <div class="form-row-2">
         <div class="form-field"><label>Name *</label><input type="text" class="cust-dog-name" value="${name.replace(/"/g,'&quot;')}"></div>
+        <div class="form-field"><label>Type</label>
+          <select class="cust-dog-species">
+            <option value="dog" ${species === 'cat' ? '' : 'selected'}>🐾 Dog</option>
+            <option value="cat" ${species === 'cat' ? 'selected' : ''}>🐈 Cat</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row-2">
         <div class="form-field"><label>Vaccination due</label><input type="date" class="cust-dog-vax-due" value="${due}"></div>
+        <div class="form-field"></div>
       </div>
       <div class="form-field"><label>Vaccination status</label><input type="text" class="cust-dog-vax-status" value="${status.replace(/"/g,'&quot;')}" placeholder="e.g. Up to date · DA2PP+R"></div>
       <div class="form-field"><label>Vaccination notes</label><textarea class="cust-dog-vax-notes" rows="2">${notes.replace(/</g,'&lt;')}</textarea></div>
@@ -4785,6 +5174,7 @@ function openEditCustomer(householdId) {
       const dogPayload = {
         household_id: hhId,
         name,
+        species: (r.querySelector('.cust-dog-species')?.value === 'cat') ? 'cat' : 'dog',
         archived: false,  // always (re)surface the dog in the list
         vaccination_status: r.querySelector('.cust-dog-vax-status').value.trim() || null,
         vaccination_due_date: r.querySelector('.cust-dog-vax-due').value || null,
@@ -4985,11 +5375,13 @@ function dogPickerInit(id, opts = {}){
     const q = input.value.trim().toLowerCase();
     const matches = (_dogs || [])
       .filter(d => !excludeIds.has(d.id))
+      // Only offer the same species — merging a cat into a dog is never intended.
+      .filter(d => opts.species == null || (isCatAnimal(d) ? 'cat' : 'dog') === opts.species)
       .filter(d => !q || (d.name || '').toLowerCase().includes(q))
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     let html = '';
     if (!matches.length){
-      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">No matching dogs</div>`;
+      html += `<div style="padding:0.5rem 0.75rem;color:#94a3b8;font-size:0.85rem">No matching ${opts.species === 'cat' ? 'cats' : 'dogs'}</div>`;
     } else {
       matches.slice(0, 30).forEach(d => {
         const h = _households.find(x => x.id === d.household_id);
@@ -5108,6 +5500,7 @@ function openMergeDog(sourceId){
 
   dogPickerInit('mergedog-target', {
     excludeIds: [sourceId],
+    species: isCatAnimal(src) ? 'cat' : 'dog',
     onSelect: (tgt) => renderMergeDogFields(src, tgt),
   });
   const ti = document.getElementById('mergedog-target-input');
@@ -5165,13 +5558,13 @@ async function deleteBooking(bookingId) {
 // ACTION: MARK CLEANING DONE
 // ============================================================
 async function markCleaningDone(id, kennelNum) {
-  if (!confirm(`Mark K${kennelNum} cleaning as complete?`)) return;
+  if (!confirm(`Mark ${kLabel(kennelNum)} cleaning as complete?`)) return;
   const { error } = await db.from('cleanings').update({
     status: 'completed',
     completed_date: todayStr(),
   }).eq('id', id);
   if (error) { showToast('Error: ' + error.message, 'error'); return; }
-  showToast(`K${kennelNum} cleaning marked complete`);
+  showToast(`${kLabel(kennelNum)} cleaning marked complete`);
   await loadAll();
 }
 
@@ -5191,7 +5584,7 @@ function openCleaningEditor(cleaningId) {
     : (c.scheduled_date || todayStr());
   const body = `
     <div style="font-size:0.85rem;color:#475569;margin-bottom:0.75rem">
-      <strong>K${c.kennel_number}</strong> — ${c.reason || 'Cleaning'}
+      <strong>${kLabel(c.kennel_number)}</strong> — ${c.reason || 'Cleaning'}
       <div style="color:#94a3b8;font-size:0.78rem;margin-top:0.2rem">
         Status: ${isDone ? 'Completed' : 'Pending'}${c.manual_date ? ' · manually moved' : ''}
       </div>
@@ -5237,7 +5630,7 @@ async function cleaningMarkDoneOn(id) {
   }).eq('id', id);
   if (error) { showToast('Error: ' + error.message, 'error'); return; }
   closeModal();
-  showToast(`K${c ? c.kennel_number : ''} cleaning marked done ${fmtDate(doneDate)}`);
+  showToast(`${c ? kLabel(c.kennel_number) : ''} cleaning marked done ${fmtDate(doneDate)}`);
   await loadAll();
 }
 
@@ -5343,7 +5736,7 @@ function openInvoiceDetail(id) {
   const body = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem 1.5rem;font-size:0.875rem">
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Dog</div><strong>${b ? b.dog_name : '—'}</strong></div>
-      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Kennel</div><strong>K${b ? b.kennel_number : '—'}</strong></div>
+      <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Kennel</div><strong>${b ? kLabel(b.kennel_number) : '—'}</strong></div>
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Check-in</div>${b ? fmtDate(b.check_in_date) + (b.check_in_time ? ' at ' + fmtTime(b.check_in_time) : '') : '—'}</div>
       <div><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Check-out</div>${b ? fmtDate(b.check_out_date) + (b.check_out_time ? ' at ' + fmtTime(b.check_out_time) : '') : '—'}</div>
       <div style="grid-column:1/-1"><div style="font-size:0.7rem;text-transform:uppercase;color:#94a3b8;margin-bottom:0.15rem">Billed</div><strong>${fmtBilling(i.days_billed, i.weeks_billed)}</strong></div>
@@ -5537,7 +5930,7 @@ async function purchaseShopping(id, item) {
 // ============================================================
 // TABS
 // ============================================================
-const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','bookings','reports','users'];
+const MORE_TABS = ['reminders','notes','shopping','tasks','customers','dogs','cats','bookings','reports','users'];
 
 function switchTab(tab) {
   if (!isTabAllowed(tab)) tab = 'overview';
@@ -5564,8 +5957,12 @@ function switchTab(tab) {
   if (tab === 'invoices') setInvFilter(_invFilter);
   if (tab === 'notes') renderNotes();
   if (tab === 'customers') renderCustomers();
-  if (tab === 'dogs') {
-    // Default to the alphabetical list when arriving via the More menu
+  if (tab === 'dogs' || tab === 'cats') {
+    // Dogs and Cats share one page implementation, switched by _speciesCtx.
+    _speciesCtx = (tab === 'cats') ? 'cat' : 'dog';
+    const cur = _currentDogId ? (_dogs || []).find(d => d.id === _currentDogId) : null;
+    // An animal selected on the other species' page doesn't carry over.
+    if (cur && (isCatAnimal(cur) ? 'cat' : 'dog') !== _speciesCtx) _currentDogId = null;
     if (!_currentDogId) renderDogsList();
     else renderDogPage();
   }
@@ -5595,6 +5992,12 @@ let _bkUpcoming = false;
 function setBkSearch(v){ _bkSearch = v; renderBookings(); }
 function setBkStatus(v){ _bkStatus = v; renderBookings(); }
 function setBkKennel(v){ _bkKennel = v; renderBookings(); }
+// 'cats' matches every cat-condo space; otherwise it's an exact space number.
+function bkKennelMatch(b){
+  if (_bkKennel === 'all') return true;
+  if (_bkKennel === 'cats') return isCatBooking(b);
+  return String(b.kennel_number) === String(_bkKennel);
+}
 function setBkUpcoming(v){ _bkUpcoming = v; renderBookings(); }
 
 function bkStatusBadge(status) {
@@ -5616,7 +6019,7 @@ function renderBookings() {
 
   let rows = [..._bookings];
   if (_bkStatus !== 'all') rows = rows.filter(b => b.status === _bkStatus);
-  if (_bkKennel !== 'all') rows = rows.filter(b => String(b.kennel_number) === _bkKennel);
+  if (_bkKennel !== 'all') rows = rows.filter(bkKennelMatch);
   if (_bkUpcoming) rows = rows.filter(b => !b.check_out_date || b.check_out_date >= td);
   if (q) {
     rows = rows.filter(b => {
@@ -5645,7 +6048,7 @@ function renderBookings() {
   let html = '<div style="display:flex;flex-direction:column;gap:0.4rem">';
   rows.forEach(b => {
     const owner = (_households || []).find(h => h.id === b.household_id);
-    const kennelLabel = b.kennel_number === 11 ? 'VIP' : 'K' + b.kennel_number;
+    const kennelLabel = kLabel(b.kennel_number);
     const groupCount = b.booking_group_id
       ? _bookings.filter(x => x.booking_group_id === b.booking_group_id).length
       : 1;
@@ -5654,7 +6057,7 @@ function renderBookings() {
                   onclick="openBookingChooser('${b.id}')"
                   onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:0.9rem">🐾 ${b.dog_name}${groupTag}</div>
+        <div style="font-weight:600;font-size:0.9rem">${isCatBooking(b) ? '🐈' : '🐾'} ${b.dog_name}${groupTag}</div>
         <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner ? owner.owner_name : '(no owner on file)'} &middot; ${fmtDateY(b.check_in_date)} &rarr; ${fmtDateY(b.check_out_date)}</div>
       </div>
       <span class="badge badge-gray" style="font-size:0.7rem">${kennelLabel}</span>
@@ -5821,8 +6224,14 @@ function computeReportMetrics(start,end){
   const overlaps = b => b.check_in_date && b.check_out_date && b.check_in_date<=end && b.check_out_date>=start;
   const periodDays = diffDays(start,end)+1;
 
-  const boarding = _bookings.filter(b => b.status!=='cancelled' && !b.dog_pound);
+  // Cat-condo stays are reported separately so the kennel KPIs (occupancy,
+  // kennel-nights, busiest kennel) keep meaning what they always did.
+  const allBoarding     = _bookings.filter(b => b.status!=='cancelled' && !b.dog_pound);
+  const boarding        = allBoarding.filter(b => !isCatBooking(b));
+  const catBoarding     = allBoarding.filter(b =>  isCatBooking(b));
   const boardingOverlap = boarding.filter(overlaps);
+  const catOverlap      = catBoarding.filter(overlaps);
+  const allOverlap      = allBoarding.filter(overlaps);
 
   // For an ongoing period, "so far" stops at today rather than the period end
   const _today = todayStr();
@@ -5854,7 +6263,7 @@ function computeReportMetrics(start,end){
 
   // Per-customer days (one dog per logical booking)
   const seenGroup=new Set(), custDays={}, custBk={};
-  boardingOverlap.forEach(b=>{
+  allOverlap.forEach(b=>{   // dogs AND cats — this is about the customer, not the kennel
     const g=grp(b); if (seenGroup.has(g)) return; seenGroup.add(g);
     const s=b.check_in_date>start?b.check_in_date:start;
     const e=b.check_out_date<end?b.check_out_date:end;
@@ -5884,7 +6293,23 @@ function computeReportMetrics(start,end){
   const invInP=_invoices.filter(iv=> inP(iv.invoice_date));
 
   const bookingsCount = new Set(boardingOverlap.map(grp)).size;
-  const cleaningsDone = _cleanings.filter(c=> c.status==='completed' && inP(c.completed_date));
+  const cleaningsDone    = _cleanings.filter(c=> c.status==='completed' && inP(c.completed_date) && !isCatSpace(c.kennel_number));
+  const catCleaningsDone = _cleanings.filter(c=> c.status==='completed' && inP(c.completed_date) &&  isCatSpace(c.kennel_number));
+
+  // ── Cat Condo ──
+  // A whole-side booking occupies three condos, so condo-nights expand via
+  // spaceUnits() and occupancy is measured against all six condos.
+  const catUnitSet = new Set();
+  catOverlap.forEach(b=>{
+    const cs = b.check_in_date>start ? b.check_in_date : start;
+    const ce = b.check_out_date<end ? b.check_out_date : end;
+    for (let d=cs; d<=ce; d=_rshift(d,1)) spaceUnits(b.kennel_number).forEach(u=> catUnitSet.add(u+'|'+d));
+  });
+  const catStayGroups=new Set(); let catStaySum=0, catStayN=0;
+  catBoarding.filter(b=>inP(b.check_in_date)).forEach(b=>{
+    const g=grp(b); if (catStayGroups.has(g)) return; catStayGroups.add(g);
+    const n=diffDays(b.check_in_date,b.check_out_date)+1; if (n>0){ catStaySum+=n; catStayN++; }
+  });
 
   return {
     periodDays,
@@ -5892,7 +6317,7 @@ function computeReportMetrics(start,end){
     checkins: boarding.filter(b=>inP(b.check_in_date)).length,
     checkouts: boarding.filter(b=>inP(b.check_out_date)).length,
     bookings: bookingsCount,
-    cancellations: new Set(_bookings.filter(b=> b.status==='cancelled' && !b.dog_pound && inP(b.check_in_date)).map(grp)).size,
+    cancellations: new Set(_bookings.filter(b=> b.status==='cancelled' && !b.dog_pound && !isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
     daysBooked: knSet.size,
     occupancy: periodDays? (stdSet.size/(10*periodDays))*100 : 0,
     cleanings: cleaningsDone.length,
@@ -5910,14 +6335,25 @@ function computeReportMetrics(start,end){
     newCustomers: _households.filter(h=> h.created_at && inP(h.created_at.slice(0,10))).length,
     compassionate: new Set(boardingOverlap.filter(b=>b.compassionate_care).map(grp)).size,
     poundStays: new Set(_bookings.filter(b=> b.dog_pound && b.status!=='cancelled' && overlaps(b)).map(grp)).size,
-    busiestLabel: busiest ? (busiest==='11'?'VIP':('Kennel '+busiest)) : '—',
+    busiestLabel: busiest ? kLabel(busiest) : '—',
     busiestN,
     invoices: invInP.length,
     billedDays: invInP.reduce((s,iv)=>s+(iv.days_billed||0),0),
     outWindow: invInP.filter(iv=>iv.outside_window_pickup).length,
     outHours: invInP.filter(iv=>iv.outside_hours_dropoff).length,
     offDelivery: invInP.filter(iv=>iv.off_site_delivery).length,
-    topCustomers
+    topCustomers,
+
+    // Cat Condo (kept out of every KPI above)
+    cats: catOverlap.length,
+    catCheckins: catBoarding.filter(b=>inP(b.check_in_date)).length,
+    catCheckouts: catBoarding.filter(b=>inP(b.check_out_date)).length,
+    catBookings: new Set(catOverlap.map(grp)).size,
+    catCancellations: new Set(_bookings.filter(b=> b.status==='cancelled' && isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
+    catCondoNights: catUnitSet.size,
+    catOccupancy: periodDays? (catUnitSet.size/(6*periodDays))*100 : 0,
+    catAvgStay: catStayN? catStaySum/catStayN : 0,
+    catCleanings: catCleaningsDone.length
   };
 }
 
@@ -5975,6 +6411,22 @@ function renderReports(){
     repKpi('Occupancy', m.occupancy, P('occupancy'), {fmt:v=>Math.round(v)+'%', sub:'kennels 1–10', unit:'pts'}),
   ].join('');
 
+  // Cat Condo block — only shown once there's cat history to report on.
+  const anyCats = (_bookings || []).some(isCatBooking);
+  const catBlock = anyCats ? `
+     <div class="rep-section-title">Cat Condo</div>
+     <div class="rep-kpi-grid">${[
+       repKpi('Cats Boarded', m.cats, P('cats'), {sub:'cats in care during period'}),
+       repKpi('Cat Check-ins', m.catCheckins, P('catCheckins'), {sub:'arrivals in period'}),
+       repKpi('Cat Check-outs', m.catCheckouts, P('catCheckouts'), {sub:'departures in period'}),
+       repKpi('Cat Bookings', m.catBookings, P('catBookings'), {sub:'multi-cat stay = 1'}),
+       repKpi('Cat Cancellations', m.catCancellations, P('catCancellations'), {sub:'by booking date', invert:true}),
+       repKpi('Condo-nights', m.catCondoNights, P('catCondoNights'), {sub:'a whole side counts as 3'}),
+       repKpi('Condo Occupancy', m.catOccupancy, P('catOccupancy'), {fmt:v=>Math.round(v)+'%', sub:'6 condos (L1–L3, R1–R3)', unit:'pts'}),
+       repKpi('Avg Cat Stay', m.catAvgStay, P('catAvgStay'), {fmt:v=>v? v.toFixed(1):'—', sub:'nights / booking', decimal:true}),
+       repKpi('Condo Cleanings', m.catCleanings, P('catCleanings'), {sub:'completed in period'}),
+     ].join('')}</div>` : '';
+
   const insights = [
     repKpi('Avg Stay', m.avgStay, P('avgStay'), {fmt:v=>v? v.toFixed(1):'—', sub:'nights / booking', decimal:true}),
     repKpi('Avg Dogs / Booking', m.avgDogsPerBooking, P('avgDogsPerBooking'), {fmt:v=>v? v.toFixed(1):'—', decimal:true}),
@@ -6006,8 +6458,10 @@ function renderReports(){
      <div class="card" style="padding:0.5rem 1rem">${top}</div>
      <div class="rep-section-title">Additional Insights</div>
      <div class="rep-kpi-grid">${insights}</div>
+     ${catBlock}
      <div style="font-size:0.72rem;color:#94a3b8;margin-top:1rem;line-height:1.5">
        Boarding counts exclude cancelled bookings and Village dog-pound stays; compassionate (no-charge) stays are included.
+       Cat-condo stays are reported in their own section and are left out of every kennel figure above (Top 5 Customers is the one exception — it counts a customer's cats and dogs together).
        A stay occupies its kennel from check-in through check-out (last night). "Days Booked" counts distinct kennel-nights, so dogs sharing a kennel are not double-counted.
      </div>`;
 }
@@ -6483,7 +6937,7 @@ async function renderSchedule() {
     rHTML += `<div class="sched-item ${done ? 'done' : ''}">
       <input type="checkbox" class="sched-cb" ${done ? 'checked' : ''} onchange="toggleCompletion('${key}',this,'${td}')">
       <div class="sched-time">5:30pm</div>
-      <div class="sched-label">🧹 Clean K${c.kennel_number} — ${c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)'}</div>
+      <div class="sched-label">🧹 Clean ${kLabel(c.kennel_number)} — ${c.type === 'quick_refresh' ? 'Quick refresh (15 min)' : 'Full clean (30 min)'}</div>
     </div>`;
   });
 
@@ -6497,7 +6951,7 @@ async function renderSchedule() {
       );
       if (!hasUpcoming) {
         rHTML += `<div class="sched-item"><div class="sched-time"></div>
-          <div class="sched-label sched-optional">Optional: clean K${c.kennel_number} if time permits</div>
+          <div class="sched-label sched-optional">Optional: clean ${kLabel(c.kennel_number)} if time permits</div>
         </div>`;
       }
     });
