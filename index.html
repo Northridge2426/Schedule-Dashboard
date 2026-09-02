@@ -93,6 +93,9 @@
     .kennel-cell.blocked  .k-dog    { color: #64748b; }
     .kennel-cell.blocked  .k-action { color: #64748b; }
     .k-num  { font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
+    .k-clean-flag { margin-left: 0.2rem; font-size: 0.7rem; }
+    .kennel-cell.needs-clean { box-shadow: inset 0 0 0 2px #f59e0b; }
+    .kennel-cell.needs-clean .k-action { color: #b45309; font-weight: 700; }
     .k-dog  { font-size: 0.75rem; font-weight: 600; margin-top: 0.15rem; line-height: 1.2; }
     .k-date { font-size: 0.62rem; color: #94a3b8; margin-top: 0.2rem; }
     .k-action { font-size: 0.62rem; margin-top: 0.2rem; color: #15803d; font-weight: 500; }
@@ -250,6 +253,7 @@
     .bd-note-label { font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8; margin-top:0.35rem; }
     .bd-note { font-size:0.83rem; color:#334155; white-space:pre-wrap; line-height:1.35; }
     .bd-note-empty { font-size:0.8rem; color:#cbd5e1; font-style:italic; }
+    .bd-warn { display:flex; align-items:center; gap:0.6rem; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:0.6rem 0.7rem; margin-bottom:0.55rem; color:#b45309; font-size:0.88rem; }
     .bd-actions { display:flex; flex-direction:column; gap:0.4rem; margin-top:0.15rem; }
     .bd-minor { display:flex; gap:0.4rem; margin-top:0.15rem; }
     .bd-minor .btn { flex:1; font-size:0.78rem; }
@@ -1131,6 +1135,41 @@ async function autoScheduleCleanings() {
     return best;
   };
 
+  // ── Transfer repair pre-pass ──────────────────────────────────────
+  // A cleaning sitting on a kennel its booking has left is normally a booking
+  // that was MOVED (the dog never stayed there) — the cleaning should follow.
+  // But a TRANSFER splits the stay: a historical segment keeps the old kennel
+  // and that kennel genuinely needs cleaning. Spot the historical segment (same
+  // dog, old kennel, ending the day before the continuing booking now starts)
+  // and re-anchor the cleaning to it instead of dragging it to the new kennel.
+  // Runs every load, so transfers made before this fix repair themselves.
+  const reanchors = [];
+  for (const c of pendingCleanings) {
+    const lb = c.booking_id ? bookingById[c.booking_id] : null;
+    if (!lb || !lb.kennel_number || c.kennel_number === lb.kennel_number) continue;
+    if (lb.status !== 'pending' && lb.status !== 'active') continue;
+    const seg = _bookings.find(x =>
+      x.id !== lb.id &&
+      x.status !== 'cancelled' &&
+      x.kennel_number === c.kennel_number &&
+      x.dog_id && lb.dog_id && x.dog_id === lb.dog_id &&
+      x.check_out_date && lb.check_in_date &&
+      x.check_out_date === addDays(lb.check_in_date, -1));
+    if (!seg) continue;
+    const segCovered = _cleanings.some(y => y.booking_id === seg.id && y.id !== c.id);
+    if (segCovered) continue;
+    c.booking_id = seg.id;                      // stays on the old kennel
+    reanchors.push({ id: c.id, booking_id: seg.id });
+  }
+  if (reanchors.length) {
+    (async () => {
+      for (const r of reanchors) {
+        try { await db.from('cleanings').update({ booking_id: r.booking_id }).eq('id', r.id); }
+        catch(e) { /* silent — next loadAll will retry */ }
+      }
+    })();
+  }
+
   // Auto-provision missing cleanings for pending/active bookings that predate the
   // pre-create feature (no cleaning_id linked yet). Insert into DB + local array
   // so the rest of the scheduler picks them up this same run.
@@ -1243,10 +1282,21 @@ async function autoScheduleCleanings() {
     const anchored = !!(lb && (lb.status === 'pending' || lb.status === 'active') &&
                         lb.check_out_date && lb.check_out_date >= lb.check_in_date);
     // Anchored cleaning follows its booking if the booking was moved between kennels.
+    // (Transfers were already dealt with by the pre-pass above.)
     if (anchored && lb.kennel_number && c.kennel_number !== lb.kennel_number) {
       c.kennel_number = lb.kennel_number;
       kennelFixes.push({ id: c.id, kennel_number: lb.kennel_number });
     }
+
+    // Is a NEW dog already in this kennel, having arrived after the stay this
+    // cleaning is for ended? Then the kennel is occupied AND dirty: the clean
+    // should have happened before that dog moved in, so it's overdue now — not
+    // something to schedule for after the new dog leaves.
+    const vacated = (lb && lb.check_out_date) ? lb.check_out_date : (c.scheduled_date || null);
+    const occupant = vacated ? _bookings.find(x =>
+      x.status === 'active' &&
+      spacesOverlap(x.kennel_number, c.kennel_number) &&
+      x.check_in_date && x.check_in_date > vacated) : null;
     let earliest, deadline, checkoutDay = null;
     if (anchored) {
       checkoutDay = lb.check_out_date;
@@ -1259,7 +1309,8 @@ async function autoScheduleCleanings() {
       if (earliest < td) earliest = td;
       deadline = nextCheckinOnOrAfter(c.kennel_number, td);
     }
-    work.push({ c, anchored, earliest, deadline, checkoutDay });
+    c._blocking_occupant = occupant ? occupant.dog_name : null;
+    work.push({ c, anchored, earliest, deadline, checkoutDay, occupant: !!occupant });
   }
 
   // Priority: the kennel whose next check-in is soonest gets the soonest slot.
@@ -1275,6 +1326,18 @@ async function autoScheduleCleanings() {
   for (const item of work) {
     const { c, deadline, checkoutDay } = item;
     let earliest = item.earliest;
+    // Occupied-and-dirty: pin it to today and skip the one-per-day spreading —
+    // this one is already late, it shouldn't queue behind tidier work.
+    if (item.occupant) {
+      const assignedNow = applyManual(c, td);
+      dayCounts[assignedNow] = (dayCounts[assignedNow] || 0) + 1;
+      const prevDate = c.scheduled_date;
+      c.scheduled_date = assignedNow;
+      c.must_complete  = true;
+      c._next_checkin  = deadline || null;
+      if (prevDate !== assignedNow) writebacks.push({ id: c.id, scheduled_date: assignedNow });
+      continue;
+    }
     // Same-/next-day turnaround: if the next dog arrives on or before the normal
     // day-after-checkout, clean on the checkout day itself (unless that day is blocked).
     if (deadline && checkoutDay && deadline <= earliest &&
@@ -1377,8 +1440,15 @@ function renderKennels(bookings, cleanings, kennels) {
   // booking) is NOT dirty yet.
   const bookingByIdK = {};
   bookings.forEach(b => { bookingByIdK[b.id] = b; });
+  // Occupied AND dirty: a new dog is already in the kennel but the previous
+  // stay's cleaning was never ticked off (e.g. a transfer into a dirty kennel).
+  // The kennel keeps showing its dog, with a broom flag until it's marked clean.
+  const occupiedDirty = {};
   cleanings.filter(c => c.status !== 'completed' && c.status !== 'skipped').forEach(c => {
-    if (activeByKennel[c.kennel_number]) return;
+    if (activeByKennel[c.kennel_number]) {
+      if (c._blocking_occupant && !occupiedDirty[c.kennel_number]) occupiedDirty[c.kennel_number] = c;
+      return;
+    }
     const lb = c.booking_id ? bookingByIdK[c.booking_id] : null;
     if (lb && lb.check_out_date && lb.check_out_date > td) return; // future checkout — not dirty yet
     // Orphan cleanings (no booking link) are legacy post-checkout cleanings for a
@@ -1461,9 +1531,14 @@ function renderKennels(bookings, cleanings, kennels) {
       dogName = 'Ready'; dateLabel = ''; actionLabel = 'tap to add booking';
     }
 
+    // Occupied but still dirty from the previous stay — flag it without hiding
+    // the dog that's actually in there.
+    const dirtyOccupied = isActive ? occupiedDirty[k] : null;
+    if (dirtyOccupied) actionLabel = 'needs cleaning — tap';
+
     const cell = document.createElement('div');
-    cell.className = 'kennel-cell ' + display;
-    cell.innerHTML = `<div class="k-num">${kLabel(k)}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
+    cell.className = 'kennel-cell ' + display + (dirtyOccupied ? ' needs-clean' : '');
+    cell.innerHTML = `<div class="k-num">${kLabel(k)}${dirtyOccupied ? '<span class="k-clean-flag" title="Still needs cleaning from the previous stay">🧹</span>' : ''}</div><div class="k-dog">${dogName}</div><div class="k-date">${dateLabel}</div>${actionLabel ? `<div class="k-action">${actionLabel}</div>` : ''}`;
 
     if (isDirty && !isActive) {
       // Target the pending cleaning driving the dirty state — the one whose booking
@@ -2409,7 +2484,32 @@ function openBookingChooser(bookingId) {
   }
   minor += `<button class="btn btn-secondary" onclick="deleteBooking('${b.id}')" style="color:#b91c1c;border-color:#fecaca" title="Entered in error — removes it entirely (not a cancellation)">🗑 Delete${group.length > 1 ? ' (all ' + group.length + ')' : ''}</button>`;
 
+  // The kennel this dog is in may still be carrying an unfinished cleaning from
+  // whoever was in it before (most often after a transfer into a dirty kennel).
+  // There's no other way to reach that cleaning once a dog is in the kennel, so
+  // it gets a callout here with a tick-off button.
+  let cleanWarn = '';
+  if (b.status === 'active' || b.status === 'pending') {
+    const pend = (_cleanings || []).filter(c =>
+      c.status !== 'completed' && c.status !== 'skipped' &&
+      spacesOverlap(c.kennel_number, b.kennel_number) &&
+      c.booking_id !== b.id &&
+      (c._blocking_occupant || (b.check_in_date && c.scheduled_date && c.scheduled_date < b.check_in_date)))
+      .sort((x, y) => (x.scheduled_date || '').localeCompare(y.scheduled_date || ''))[0];
+    if (pend) {
+      const who = (pend.reason || '').replace(/^Post-(checkout|transfer):\s*/i, '').replace(/\s*\(\d{4}-\d{2}-\d{2}\)\s*$/, '').trim();
+      cleanWarn = `<div class="bd-warn">
+        <div style="flex:1;min-width:0">
+          <strong>🧹 ${kLabel(pend.kennel_number)} still needs cleaning</strong>
+          <div style="font-size:0.76rem;color:#92400e;margin-top:0.1rem">Left over from ${who ? bdEsc(who) + "'s stay" : 'the previous stay'}${pend.scheduled_date ? ' · due ' + fmtDate(pend.scheduled_date) : ''}. It was never ticked off before this booking moved in.</div>
+        </div>
+        <button class="btn btn-sm btn-success" onclick="closeModal();markCleaningDone('${pend.id}', ${pend.kennel_number})" style="flex-shrink:0">✓ Mark cleaned</button>
+      </div>`;
+    }
+  }
+
   const body = `<div style="margin-bottom:0.5rem"><span class="badge ${sCls}">${sLabel}</span></div>
+    ${cleanWarn}
     ${ownerSec}
     ${staySec}
     ${animalsSec}
@@ -3119,19 +3219,43 @@ async function doTransferKennel(bookingId) {
       .eq('id', b.id);
     if (contErr) throw contErr;
 
-    // For a past (completed) split, create the old-kennel cleaning now. For a future
-    // split the auto-scheduler provisions it from the pending historical segment.
-    if (histStatus === 'completed') {
-      const { data: existingClean } = await db.from('cleanings')
+    // The old kennel still has to be cleaned — the dog really did stay in it.
+    // The stay's existing post-checkout cleaning is sitting on the old kennel
+    // anchored to the booking we just moved, so RE-ANCHOR it to the historical
+    // segment: it stays where it is and now means "clean the old kennel after
+    // the transfer". (Without this the scheduler's kennel-follows-booking rule
+    // drags it to the new kennel and the old one is silently marked clean.)
+    // The continuing booking is then left with no cleaning, and the
+    // auto-provisioner gives it a fresh one on the new kennel at checkout.
+    const transferReason = `Post-transfer: ${b.dog_name} left ${kLabel(oldKennel)} (${D})`;
+    const { data: ownClean } = await db.from('cleanings')
+      .select('id')
+      .eq('booking_id', b.id)
+      .eq('kennel_number', oldKennel)
+      .not('status', 'in', '("completed","skipped")')
+      .order('scheduled_date', { ascending: true })
+      .limit(1);
+
+    if (ownClean && ownClean.length) {
+      await db.from('cleanings').update({
+        booking_id: hist.id,
+        reason: transferReason,
+        scheduled_date: D,
+        manual_date: null,
+      }).eq('id', ownClean[0].id);
+    } else {
+      // No cleaning was attached to this stay. Make one for the old kennel unless
+      // something else already covers it.
+      const { data: otherClean } = await db.from('cleanings')
         .select('id').eq('kennel_number', oldKennel)
         .not('status', 'in', '("completed","skipped")')
         .gte('scheduled_date', lastNightOld)
         .limit(1);
-      if (!existingClean || !existingClean.length) {
+      if (!otherClean || !otherClean.length) {
         await db.from('cleanings').insert({
           kennel_number: oldKennel,
           type: 'full',
-          reason: `Post-transfer: ${b.dog_name} left ${kLabel(oldKennel)} (${D})`,
+          reason: transferReason,
           scheduled_date: D,
           status: 'pending',
           booking_id: hist.id,
@@ -4895,6 +5019,22 @@ function openRenameAnimal(dogId) {
     if (error) throw error;
     const { error: bErr } = await db.from('bookings').update({ dog_name: name }).eq('dog_id', dogId);
     if (bErr) throw bErr;
+    // Cleaning reasons quote the name too ("Post-checkout: Bluetick (2026-09-07)"),
+    // so refresh those as well or the old name lingers on the cleaning list.
+    try {
+      const oldName = d.name;
+      if (oldName && oldName !== name) {
+        const ids = (_bookings || []).filter(x => x.dog_id === dogId).map(x => x.id);
+        if (ids.length) {
+          const { data: cl } = await db.from('cleanings').select('id, reason').in('booking_id', ids);
+          for (const c of (cl || [])) {
+            if (c.reason && c.reason.includes(oldName)) {
+              await db.from('cleanings').update({ reason: c.reason.split(oldName).join(name) }).eq('id', c.id);
+            }
+          }
+        }
+      }
+    } catch (e) { /* cosmetic only */ }
     d.name = name;
     closeModal();
     showToast('Renamed to ' + name);
