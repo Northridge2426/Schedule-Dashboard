@@ -253,6 +253,14 @@
     .bd-note-label { font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8; margin-top:0.35rem; }
     .bd-note { font-size:0.83rem; color:#334155; white-space:pre-wrap; line-height:1.35; }
     .bd-note-empty { font-size:0.8rem; color:#cbd5e1; font-style:italic; }
+    .bs-group { margin-bottom: 0.4rem; }
+    .bs-group-title { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 0.2rem; }
+    .bs-row { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .bs-chip { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid #e2e8f0; border-radius: 999px; padding: 0.2rem 0.55rem; font-size: 0.8rem; cursor: pointer; background: #fff; user-select: none; }
+    .bs-chip:hover { background: #f8fafc; }
+    .bs-chip input { width: auto; margin: 0; }
+    .bs-chip:has(input:checked) { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; font-weight: 600; }
+    .bs-quick { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.45rem; }
     .bd-warn { display:flex; align-items:center; gap:0.6rem; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:0.6rem 0.7rem; margin-bottom:0.55rem; color:#b45309; font-size:0.88rem; }
     .bd-actions { display:flex; flex-direction:column; gap:0.4rem; margin-top:0.15rem; }
     .bd-minor { display:flex; gap:0.4rem; margin-top:0.15rem; }
@@ -1701,7 +1709,10 @@ function renderCleanings(cleanings) {
       <td>${typeLabel}</td>
       <td>${dateCell}</td>
       <td style="color:#94a3b8;font-size:0.78rem">${c.reason || ''}${c.notes ? '<br><em>' + c.notes + '</em>' : ''}${warnNote}</td>
-      <td><button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})">✓ Done</button></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-success" onclick="markCleaningDone('${c.id}',${c.kennel_number})" title="Log this cleaning as done today">✓ Done</button>
+        <button class="btn-icon" onclick="openCleaningEditor('${c.id}')" title="Done on a different day, or move the date">📅</button>
+      </td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -2336,8 +2347,11 @@ function exportHistoryCSV() {
 // A block matches when its start_date <= dateStr AND (end_date IS NULL OR end_date >= dateStr)
 // AND its kennel_number === kennelNum OR is NULL (all-kennels block).
 function getKennelBlocksOn(kennelNum, dateStr) {
+  // spacesOverlap, not === : a block on "Cat Left" (18) covers condos L1–L3,
+  // and a block on L2 shows up when something asks about the Left side. Without
+  // this a whole-side block had no column to draw itself in and vanished.
   return (_kennelBlocks || []).filter(b =>
-    (b.kennel_number === null || b.kennel_number === kennelNum) &&
+    (b.kennel_number === null || spacesOverlap(b.kennel_number, kennelNum)) &&
     b.start_date <= dateStr &&
     (!b.end_date || b.end_date >= dateStr)
   );
@@ -2347,7 +2361,7 @@ function getKennelBlocksOn(kennelNum, dateStr) {
 // (or any kennel when kennelNum is null).
 function getKennelBlocksOverlapping(kennelNum, startStr, endStr) {
   return (_kennelBlocks || []).filter(b => {
-    const kennelMatch = (b.kennel_number === null) || (kennelNum === null) || (b.kennel_number === kennelNum);
+    const kennelMatch = (b.kennel_number === null) || (kennelNum === null) || spacesOverlap(b.kennel_number, kennelNum);
     if (!kennelMatch) return false;
     // Ranges overlap when a.start <= b.end AND a.end >= b.start
     const blockEnd = b.end_date || '9999-12-31';
@@ -2503,7 +2517,10 @@ function openBookingChooser(bookingId) {
           <strong>🧹 ${kLabel(pend.kennel_number)} still needs cleaning</strong>
           <div style="font-size:0.76rem;color:#92400e;margin-top:0.1rem">Left over from ${who ? bdEsc(who) + "'s stay" : 'the previous stay'}${pend.scheduled_date ? ' · due ' + fmtDate(pend.scheduled_date) : ''}. It was never ticked off before this booking moved in.</div>
         </div>
-        <button class="btn btn-sm btn-success" onclick="closeModal();markCleaningDone('${pend.id}', ${pend.kennel_number})" style="flex-shrink:0">✓ Mark cleaned</button>
+        <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.25rem;align-items:stretch">
+          <button class="btn btn-sm btn-success" onclick="closeModal();markCleaningDone('${pend.id}', ${pend.kennel_number})">✓ Mark cleaned</button>
+          <a onclick="closeModal();openCleaningEditor('${pend.id}')" style="font-size:0.72rem;color:#92400e;text-decoration:underline;cursor:pointer;text-align:center">cleaned earlier…</a>
+        </div>
       </div>`;
     }
   }
@@ -3395,20 +3412,125 @@ function blockSpaceOptionList(selected) {
   return kennelOptionList(selected) + catOptionList(isCatSpace(selected) ? selected : null);
 }
 
+// Every physical space a block can apply to (whole sides expand to their condos).
+const ALL_BLOCK_UNITS = [...DOG_KENNEL_NUMS, VIP_KENNEL, ...CAT_CONDO_NUMS];
+// The concrete spaces a stored block row covers. null = the whole facility.
+function blockUnits(b) {
+  return (b.kennel_number === null) ? ALL_BLOCK_UNITS.slice() : spaceUnits(b.kennel_number);
+}
+
+// ── Space picker: checkboxes, so several kennels can be blocked at once ──
+function blockSpaceCheckboxes(preselect) {
+  const pre = new Set(preselect == null ? [] : spaceUnits(preselect));
+  const box = n => `<label class="bs-chip"><input type="checkbox" class="bs-space" value="${n}" ${pre.has(n) ? 'checked' : ''}><span>${kLabelShort(n)}</span></label>`;
+  return `
+    <div class="bs-group">
+      <div class="bs-group-title">Kennels</div>
+      <div class="bs-row">${[...DOG_KENNEL_NUMS, VIP_KENNEL].map(box).join('')}</div>
+    </div>
+    <div class="bs-group">
+      <div class="bs-group-title">Cat Condo</div>
+      <div class="bs-row">${CAT_CONDO_NUMS.map(box).join('')}</div>
+    </div>
+    <div class="bs-quick">
+      <button type="button" class="btn btn-sm btn-secondary" onclick="bsPick('kennels')">All kennels</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="bsPick('condos')">All condos</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="bsPick('left')">Left side</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="bsPick('right')">Right side</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="bsPick('all')">Everything</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="bsPick('none')">Clear</button>
+    </div>
+    <div id="bs-count" style="font-size:0.75rem;color:#64748b;margin-top:0.35rem"></div>`;
+}
+
+function bsPick(which) {
+  const sets = {
+    kennels: [...DOG_KENNEL_NUMS, VIP_KENNEL],
+    condos:  CAT_CONDO_NUMS,
+    left:    CAT_SIDE_UNITS[CAT_SIDE_LEFT],
+    right:   CAT_SIDE_UNITS[CAT_SIDE_RIGHT],
+    all:     ALL_BLOCK_UNITS,
+    none:    [],
+  };
+  const want = new Set(sets[which] || []);
+  document.querySelectorAll('.bs-space').forEach(cb => {
+    // 'none' clears everything; the others add to what's already ticked.
+    cb.checked = (which === 'none') ? false : (cb.checked || want.has(parseInt(cb.value, 10)));
+  });
+  bsUpdateCount();
+}
+
+function bsSelected() {
+  return [...document.querySelectorAll('.bs-space')].filter(cb => cb.checked).map(cb => parseInt(cb.value, 10));
+}
+
+function bsUpdateCount() {
+  const el = document.getElementById('bs-count');
+  if (!el) return;
+  const sel = bsSelected();
+  el.textContent = !sel.length
+    ? 'Nothing selected yet — tick the kennels or condos to block.'
+    : (sel.length === ALL_BLOCK_UNITS.length
+        ? 'Everything selected — this will be saved as one all-kennels block.'
+        : `${sel.length} selected: ${sel.map(kLabelShort).join(', ')}`);
+}
+
+// ── Superseding ───────────────────────────────────────────────────────
+// A new block wins wherever it overlaps an older one. The old block keeps the
+// dates and spaces the new one doesn't cover, so blocking K3 for two days
+// inside a month-long all-kennel block leaves the rest of that block intact.
+// Returns { deletes, inserts, summary } — nothing is written until the caller
+// has the user's go-ahead.
+function planBlockSupersede(newUnits, newStart, newEnd) {
+  const cover = new Set(newUnits);
+  const deletes = [], inserts = [], summary = [];
+  const newEndEff = newEnd || '9999-12-31';
+
+  for (const old of (_kennelBlocks || [])) {
+    const oldUnits = blockUnits(old);
+    const hitUnits = oldUnits.filter(u => cover.has(u));
+    if (!hitUnits.length) continue;                       // different spaces
+    const oldEndEff = old.end_date || '9999-12-31';
+    if (old.start_date > newEndEff || oldEndEff < newStart) continue;   // different dates
+
+    const keptUnits = oldUnits.filter(u => !cover.has(u));
+    const before = (old.start_date < newStart)
+      ? { start: old.start_date, end: addDaysStr(newStart, -1) } : null;
+    let after = null;
+    if (newEnd) {
+      if (!old.end_date)              after = { start: addDaysStr(newEnd, 1), end: null };
+      else if (old.end_date > newEnd) after = { start: addDaysStr(newEnd, 1), end: old.end_date };
+    }
+
+    deletes.push(old.id);
+    keptUnits.forEach(u => inserts.push({
+      kennel_number: u, start_date: old.start_date, end_date: old.end_date, reason: old.reason }));
+    hitUnits.forEach(u => {
+      if (before) inserts.push({ kennel_number: u, start_date: before.start, end_date: before.end, reason: old.reason });
+      if (after)  inserts.push({ kennel_number: u, start_date: after.start,  end_date: after.end,  reason: old.reason });
+    });
+
+    const what = hitUnits.map(kLabelShort).join(', ');
+    const range = old.end_date ? `${fmtDate(old.start_date)} → ${fmtDate(old.end_date)}` : `from ${fmtDate(old.start_date)}, indefinite`;
+    const fate = (!before && !after)
+      ? (keptUnits.length ? `no longer covers ${what}` : 'removed entirely')
+      : `trimmed on ${what} (keeps ${[before ? fmtDate(before.start) + '→' + fmtDate(before.end) : null,
+                                     after ? fmtDate(after.start) + (after.end ? '→' + fmtDate(after.end) : ' onwards') : null]
+                                     .filter(Boolean).join(' and ')})`;
+    summary.push(`• "${old.reason || '(no reason)'}" ${range} — ${fate}`);
+  }
+  return { deletes, inserts, summary };
+}
+
 function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
-  const kennelOptions = blockSpaceOptionList(defaultKennelNum);
   const start = defaultStartDate || todayStr();
   const body = `
-    <div class="form-row-2">
-      <div class="form-field"><label>Apply to *</label>
-        <select id="f-block-kennel">
-          ${kennelOptions}
-          <option value="all" ${!defaultKennelNum ? 'selected' : ''}>All kennels &amp; condos</option>
-        </select>
-      </div>
-      <div class="form-field"><label>Reason *</label>
-        <input type="text" id="f-block-reason" placeholder="e.g. Storage, Renovations">
-      </div>
+    <div class="form-field">
+      <label>Apply to *</label>
+      ${blockSpaceCheckboxes(defaultKennelNum)}
+    </div>
+    <div class="form-field"><label>Reason *</label>
+      <input type="text" id="f-block-reason" placeholder="e.g. Storage, Renovations">
     </div>
     <div class="form-row-2">
       <div class="form-field"><label>Start date *</label>
@@ -3417,31 +3539,34 @@ function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
       <div class="form-field"><label>End date (blank = indefinite)</label>
         <input type="date" id="f-block-end">
       </div>
-    </div>`;
+    </div>
+    <div style="font-size:0.72rem;color:#64748b">Where this overlaps a block that's already there, the new one takes over — the old block keeps any dates or kennels this one doesn't cover.</div>`;
 
-  openModal('Block off kennel', body, async () => {
-    const kennelSel = document.getElementById('f-block-kennel').value;
+  openModal('Block off kennels', body, async () => {
+    const targets   = bsSelected();
     const reason    = document.getElementById('f-block-reason').value.trim();
     const startDate = document.getElementById('f-block-start').value;
     const endDate   = document.getElementById('f-block-end').value || null;
 
-    if (!reason)    throw new Error('Reason is required');
-    if (!startDate) throw new Error('Start date is required');
+    if (!targets.length) throw new Error('Pick at least one kennel or condo');
+    if (!reason)         throw new Error('Reason is required');
+    if (!startDate)      throw new Error('Start date is required');
     if (endDate && endDate < startDate) throw new Error('End date must be on or after start date');
 
-    const kennelNum = (kennelSel === 'all') ? null : parseInt(kennelSel, 10);
+    // Everything ticked → store the single all-kennels row the rest of the app
+    // already understands, rather than 17 identical rows.
+    const isAll = targets.length === ALL_BLOCK_UNITS.length;
+    const rows = isAll
+      ? [{ kennel_number: null, start_date: startDate, end_date: endDate, reason }]
+      : targets.map(t => ({ kennel_number: t, start_date: startDate, end_date: endDate, reason }));
 
-    // Conflict check: any non-cancelled bookings overlapping this block?
+    // Bookings in the way (advisory — blocks never force a booking out).
     const conflicts = _bookings.filter(b => {
       if (b.status === 'cancelled') return false;
-      if (kennelNum !== null && b.kennel_number !== kennelNum) return false;
-      const bIn  = b.check_in_date;
-      const bOut = b.check_out_date;
-      if (!bIn || !bOut) return false;
-      const blkEnd = endDate || '9999-12-31';
-      return bIn <= blkEnd && bOut >= startDate;
+      if (!isAll && !targets.some(t => spacesOverlap(b.kennel_number, t))) return false;
+      if (!b.check_in_date || !b.check_out_date) return false;
+      return b.check_in_date <= (endDate || '9999-12-31') && b.check_out_date >= startDate;
     });
-
     if (conflicts.length) {
       const lines = conflicts.slice(0, 10).map(b =>
         `• ${b.dog_name} (${kLabel(b.kennel_number)}) — ${fmtDate(b.check_in_date)} → ${fmtDate(b.check_out_date)} [${b.status}]`
@@ -3451,23 +3576,41 @@ function openAddKennelBlock(defaultKennelNum, defaultStartDate) {
       if (!ok) throw new Error('Cancelled by user');
     }
 
-    const { error } = await db.from('kennel_blocks').insert({
-      kennel_number: kennelNum, start_date: startDate, end_date: endDate, reason,
-    });
+    // Older blocks this one takes over from.
+    const plan = planBlockSupersede(isAll ? ALL_BLOCK_UNITS : targets, startDate, endDate);
+    if (plan.summary.length) {
+      const ok = confirm(`This replaces ${plan.summary.length} existing block${plan.summary.length === 1 ? '' : 's'} where they overlap:\n\n${plan.summary.join('\n')}\n\nGo ahead?`);
+      if (!ok) throw new Error('Cancelled by user');
+    }
+
+    if (plan.deletes.length) {
+      const { error: delErr } = await db.from('kennel_blocks').delete().in('id', plan.deletes);
+      if (delErr) throw delErr;
+    }
+    if (plan.inserts.length) {
+      const { error: reErr } = await db.from('kennel_blocks').insert(plan.inserts);
+      if (reErr) throw reErr;
+    }
+    const { error } = await db.from('kennel_blocks').insert(rows);
     if (error) throw error;
 
     closeModal();
-    const where = kennelNum === null ? 'All kennels' : `${kLabel(kennelNum)}`;
+    const where = isAll ? 'All kennels & condos'
+      : (targets.length === 1 ? kLabel(targets[0]) : `${targets.length} spaces (${targets.map(kLabelShort).join(', ')})`);
     showToast(`${where} blocked off (${reason})`);
     await loadAll();
   }, 'Block off');
+
+  // Keep the running count honest as boxes are ticked.
+  document.querySelectorAll('.bs-space').forEach(cb => cb.addEventListener('change', bsUpdateCount));
+  bsUpdateCount();
 }
 
 function openManageKennelBlocks(kennelNum) {
   const td = todayStr();
   // Active = overlapping today; upcoming = starting after today; all-kennels blocks included
   const relevant = (_kennelBlocks || []).filter(b =>
-    (b.kennel_number === null || b.kennel_number === kennelNum)
+    (b.kennel_number === null || spacesOverlap(b.kennel_number, kennelNum))
   ).sort((a, b) => a.start_date.localeCompare(b.start_date));
 
   let listHtml = '';
@@ -5751,8 +5894,9 @@ function openCleaningEditor(cleaningId) {
       </div>
     </div>
     <div class="form-field">
-      <label>${isDone ? 'Date cleaned' : 'Scheduled date'}</label>
+      <label>${isDone ? 'Date cleaned' : 'Scheduled date — or the day you actually cleaned it'}</label>
       <input type="date" id="ce-date" value="${curDate}">
+      ${isDone ? '' : `<div style="font-size:0.72rem;color:#64748b;margin-top:0.2rem">Cleaned it yesterday and only ticking it off now? Set that date here, then <strong>Mark done (on date above)</strong>.</div>`}
     </div>
     ${isDone ? '' : `<p style="font-size:0.74rem;color:#94a3b8;margin:0.4rem 0 0">
       Moving this to a later date keeps it there until the daily auto-advance
