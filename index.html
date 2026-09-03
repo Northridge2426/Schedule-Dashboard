@@ -1025,7 +1025,7 @@ async function loadAll() {
     db.from('tasks').select('*').eq('status','active'),
     db.from('reminders').select('*').eq('status','active').order('target_date', {nullsFirst: false}),
     db.from('shopping_items').select('*').eq('status','active').order('list_name').order('item'),
-    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,household_id,off_site_pickup)'),
+    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,transfer_group_id,household_id,off_site_pickup)'),
     db.from('households').select('*').order('owner_name'),
     db.from('kennels').select('*').order('kennel_number'),
     db.from('dogs').select('*').order('name'),
@@ -1739,6 +1739,16 @@ function invRowHtml(i) {
   </div>`;
 }
 
+// One logical stay, for grouping and invoicing:
+//   • the dogs of a multi-dog booking share booking_group_id
+//   • the segments of a transferred stay share transfer_group_id (they can't
+//     share booking_group_id — the checkout cascade would double-bill them)
+// Either way they belong on one invoice card and get marked invoiced/paid together.
+function stayKey(b, fallbackId) {
+  if (!b) return 's:' + (fallbackId || '');
+  return b.booking_group_id || b.transfer_group_id || ('s:' + (b.id || fallbackId || ''));
+}
+
 function renderInvoices(invoices, bookings) {
   const pending     = invoices.filter(i => i.status === 'pending');
   const sent        = invoices.filter(i => i.status === 'sent');
@@ -1767,8 +1777,8 @@ function renderInvoices(invoices, bookings) {
   let html = '';
   // ── Awaiting Invoice ──
   html += subHdr('Awaiting Invoice');
-  const niGroups   = groupBy(needInvoice, b => b.household_id, b => b.booking_group_id || ('s:' + b.id));
-  const pendGroups = groupBy(pending, i => i.bookings?.household_id, i => i.bookings?.booking_group_id || ('s:' + (i.booking_id || i.id)));
+  const niGroups   = groupBy(needInvoice, b => b.household_id, b => stayKey(b));
+  const pendGroups = groupBy(pending, i => i.bookings?.household_id, i => stayKey(i.bookings, i.booking_id || i.id));
   if (niGroups.length || pendGroups.length) {
     niGroups.forEach(g => {
       const dogs = g.items.map(b => b.dog_name).join(', ');
@@ -1789,7 +1799,7 @@ function renderInvoices(invoices, bookings) {
         <input type="checkbox" class="inv-row-check" title="Mark invoiced" onclick="event.stopPropagation();markGroupSent('${ids}')">
         <div style="flex:1;min-width:0">
           <div style="font-size:0.875rem"><strong>${ownerOf(g.hh)}</strong></div>
-          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${dys(g.items[0].days_billed)} · due ${fmtDate(g.items[0].invoice_date)}</div>
+          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${dys(g.items.reduce((t, i) => t + (i.days_billed || 0), 0))} · due ${fmtDate(g.items[0].invoice_date)}</div>
         </div>
       </div>`;
     });
@@ -1799,7 +1809,7 @@ function renderInvoices(invoices, bookings) {
 
   // ── Awaiting Payment ──
   html += '<div style="height:0.5rem"></div>' + subHdr('Awaiting Payment');
-  const sentGroups = groupBy(sent, i => i.bookings?.household_id, i => i.bookings?.booking_group_id || ('s:' + (i.booking_id || i.id)));
+  const sentGroups = groupBy(sent, i => i.bookings?.household_id, i => stayKey(i.bookings, i.booking_id || i.id));
   if (sentGroups.length) {
     sentGroups.forEach(g => {
       const ids = g.items.map(i => i.id).join(',');
@@ -1809,7 +1819,7 @@ function renderInvoices(invoices, bookings) {
         <input type="checkbox" class="inv-row-check" title="Mark paid" onclick="event.stopPropagation();markGroupPaid('${ids}')">
         <div style="flex:1;min-width:0">
           <div style="font-size:0.875rem"><strong>${ownerOf(g.hh)}</strong> <span class="badge badge-blue" style="font-size:0.6rem">Sent</span></div>
-          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${dys(g.items[0].days_billed)} · ${fmtDate(g.items[0].invoice_date)}</div>
+          <div style="font-size:0.78rem;color:#64748b">${dogs} · ${dys(g.items.reduce((t, i) => t + (i.days_billed || 0), 0))} · ${fmtDate(g.items[0].invoice_date)}</div>
         </div>
       </div>`;
     });
@@ -2126,7 +2136,7 @@ function renderInvoicePage() {
       const hh = (_households || []).find(h => h.id === hhId);
       byOwner[hhId] = { ownerName: hh ? hh.owner_name : (hhId === '__none__' ? 'Unassigned' : '(Unknown owner)'), groups: {} };
     }
-    const groupKey = b.booking_group_id || ('single:' + (i.booking_id || i.id));
+    const groupKey = stayKey(b, i.booking_id || i.id);
     if (!byOwner[hhId].groups[groupKey]) byOwner[hhId].groups[groupKey] = { invoices: [] };
     byOwner[hhId].groups[groupKey].invoices.push(i);
   });
@@ -2180,7 +2190,7 @@ function renderInvoicePage() {
       // Per-dog billing line (always show — even single-dog groups benefit from this)
       const perDogLines = invs.map(i => {
         const dn = i.bookings?.dog_name || '?';
-        const kn = kLabel(i.bookings?.kennel_number);
+        const kn = i.bookings?.kennel_number;
         const sBadge = i.status === 'sent'
           ? '<span class="badge badge-blue" style="font-size:0.6rem;margin-left:0.3rem">Sent</span>'
           : '<span class="badge badge-yellow" style="font-size:0.6rem;margin-left:0.3rem">Pending</span>';
@@ -2193,8 +2203,18 @@ function renderInvoicePage() {
         </div>`;
       }).join('');
 
+      // A transferred stay: same dog, several kennels, one bill.
+      const isTransferStay = invs.length > 1 && new Set(invs.map(i => i.bookings?.dog_name)).size === 1;
+      // Dates span the whole stay, not just the first segment.
+      const spanIn  = invs.map(i => i.bookings?.check_in_date).filter(Boolean).sort()[0] || anyB.check_in_date;
+      const spanOut = invs.map(i => i.bookings?.check_out_date).filter(Boolean).sort().slice(-1)[0] || anyB.check_out_date;
+      const spanInB  = invs.find(i => i.bookings?.check_in_date  === spanIn)?.bookings  || anyB;
+      const spanOutB = invs.find(i => i.bookings?.check_out_date === spanOut)?.bookings || anyB;
+      const totalDays = invs.reduce((t, i) => t + (i.days_billed || 0), 0);
+
       // Bulk-action buttons when the group has >1 dog
       const bulkActions = invs.length > 1 ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.5rem;padding-top:0.5rem;border-top:1px dashed #e2e8f0">
+        ${isTransferStay ? `<div style="width:100%;font-size:0.74rem;color:#64748b;margin-bottom:0.15rem">One stay across ${invs.length} kennels (transferred mid-stay) — these settle together.</div>` : ''}
         ${invs.some(i => i.status === 'pending') ? `<button class="btn btn-sm btn-secondary" onclick="bulkInvoiceAction('${invs.filter(i=>i.status==='pending').map(i=>i.id).join(',')}','sent')">Mark all Invoiced</button>` : ''}
         ${invs.some(i => i.status !== 'paid')    ? `<button class="btn btn-sm btn-success"   onclick="bulkInvoiceAction('${invs.filter(i=>i.status!=='paid').map(i=>i.id).join(',')}','paid')">Mark all Paid</button>` : ''}
       </div>` : '';
@@ -2205,10 +2225,12 @@ function renderInvoicePage() {
           ${statusBadge}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.4rem 1rem;font-size:0.82rem;color:#475569;margin-bottom:0.5rem">
-          <div>Check-in: ${anyB.check_in_date ? fmtDate(anyB.check_in_date) + (anyB.check_in_time ? ' ' + fmtTime(anyB.check_in_time) : '') : '—'}</div>
-          <div>Check-out: ${anyB.check_out_date ? fmtDate(anyB.check_out_date) + (anyB.check_out_time ? ' ' + fmtTime(anyB.check_out_time) : '') : '—'}</div>
+          <div>Check-in: ${spanIn ? fmtDate(spanIn) + (spanInB.check_in_time ? ' ' + fmtTime(spanInB.check_in_time) : '') : '—'}</div>
+          <div>Check-out: ${spanOut ? fmtDate(spanOut) + (spanOutB.check_out_time ? ' ' + fmtTime(spanOutB.check_out_time) : '') : '—'}</div>
           <div>Invoice date: ${fmtDate(anyI.invoice_date)}</div>
-          <div>${invs.length} dog${invs.length !== 1 ? 's' : ''}</div>
+          <div>${isTransferStay
+            ? `${invs.length} kennels · ${totalDays} day${totalDays === 1 ? '' : 's'} total`
+            : `${invs.length} dog${invs.length !== 1 ? 's' : ''}`}</div>
         </div>
         ${(anyPickup || anyOffsite || anyOutside || anyDropoff || anyGrace) ? `<div style="margin-bottom:0.5rem">
           ${flagBadge(anyPickup,'🚗 Off-site pickup','badge-purple')}
@@ -2475,6 +2497,18 @@ function openBookingChooser(bookingId) {
       <div class="bd-line"><span class="bd-key">From</span><span>${when(b.check_in_date, b.check_in_time)}</span></div>
       <div class="bd-line"><span class="bd-key">To</span><span>${when(b.check_out_date, b.check_out_time)}</span></div>
       ${nights ? `<div class="bd-sub">${nights} night${nights === 1 ? '' : 's'}${group.length > 1 ? ` · group booking (${group.length} ${cat ? 'animals' : 'dogs'})` : ''}</div>` : ''}
+      ${(() => {
+        // A transferred stay is stored as several bookings; show the other legs so
+        // the split across kennels (and across invoices) isn't a surprise.
+        if (!b.transfer_group_id) return '';
+        const segs = (_bookings || []).filter(x => x.transfer_group_id === b.transfer_group_id)
+          .sort((x, y) => (x.check_in_date || '').localeCompare(y.check_in_date || ''));
+        if (segs.length < 2) return '';
+        return `<div class="bd-note-label">Transferred stay — ${segs.length} kennels</div>
+          <div class="bd-note">${segs.map(sg =>
+            `${kLabel(sg.kennel_number)}: ${fmtDate(sg.check_in_date)} → ${fmtDate(sg.check_out_date)}${sg.id === b.id ? ' (this one)' : ''}`).join('<br>')}
+          <div style="font-size:0.76rem;color:#64748b;margin-top:0.2rem">Billed as one stay — marking the invoice settles every leg.</div></div>`;
+      })()}
       ${b.notes ? `<div class="bd-note-label">Booking notes</div><div class="bd-note">${bdEsc(b.notes)}</div>` : ''}
     </div>`;
 
@@ -3215,9 +3249,15 @@ async function doTransferKennel(bookingId) {
     // upcoming (pending), so the auto-scheduler provisions its cleaning.
     const histStatus = lastNightOld < todayStr() ? 'completed' : 'pending';
     const histNote = `Transferred to ${kLabel(newKennel)} on ${D} — days in ${kLabel(oldKennel)}`;
+    // Segments of one stay share a transfer_group_id so the invoices settle
+    // together (booking_group_id stays null — the checkout cascade uses that and
+    // would double-bill). Transferring again reuses the id already on the stay.
+    const transferGroupId = b.transfer_group_id || crypto.randomUUID();
+
     const { data: hist, error: histErr } = await db.from('bookings').insert({
       dog_name: b.dog_name,
       dog_id: b.dog_id || null,
+      transfer_group_id: transferGroupId,
       kennel_number: oldKennel,
       check_in_date: b.check_in_date,
       check_out_date: lastNightOld,
@@ -3232,7 +3272,7 @@ async function doTransferKennel(bookingId) {
     // Continuing segment → new kennel from D.
     const contNote = (b.notes ? b.notes + ' · ' : '') + `Transferred from ${kLabel(oldKennel)} on ${D} (full stay began ${b.check_in_date})`;
     const { error: contErr } = await db.from('bookings')
-      .update({ kennel_number: newKennel, check_in_date: D, notes: contNote, updated_at: new Date().toISOString() })
+      .update({ kennel_number: newKennel, check_in_date: D, notes: contNote, transfer_group_id: transferGroupId, updated_at: new Date().toISOString() })
       .eq('id', b.id);
     if (contErr) throw contErr;
 
