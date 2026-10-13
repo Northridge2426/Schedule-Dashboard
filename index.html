@@ -246,6 +246,8 @@
     .bd-sub { font-size:0.76rem; color:#64748b; margin-top:0.1rem; }
     .bd-edit { color:#1d4ed8; cursor:pointer; font-size:0.74rem; font-weight:600; text-decoration:none; border:1px solid #dbeafe; background:#eff6ff; border-radius:999px; padding:0.05rem 0.45rem; white-space:nowrap; }
     .bd-edit:hover { background:#dbeafe; }
+    .bd-hist { color:#6d28d9; cursor:pointer; font-size:0.74rem; font-weight:600; text-decoration:none; border:1px solid #ede9fe; background:#f5f3ff; border-radius:999px; padding:0.05rem 0.45rem; white-space:nowrap; }
+    .bd-hist:hover { background:#ede9fe; }
     .bd-animal { border-top:1px dashed #e2e8f0; padding-top:0.5rem; margin-top:0.5rem; }
     .bd-animal:first-child { border-top:0; padding-top:0; margin-top:0; }
     .bd-animal-head { display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.3rem; }
@@ -404,7 +406,7 @@
     <button class="more-btn" id="more-customers" onclick="switchTab('customers')">Customers</button>
     <button class="more-btn" id="more-dogs" onclick="switchTab('dogs')">Dogs</button>
     <button class="more-btn" id="more-cats" onclick="switchTab('cats')">🐈 Cats</button>
-    <button class="more-btn" id="more-bookings" onclick="switchTab('bookings')">📖 Bookings</button>
+    <button class="more-btn" id="more-bookings" onclick="bkClearHistory(true);switchTab('bookings')">📖 Bookings</button>
     <button class="more-btn" id="more-reports" onclick="switchTab('reports')">📊 Reports</button>
     <button class="more-btn" id="more-users" onclick="switchTab('users')">👤 Users</button>
     <button class="more-btn" id="more-blockkennel" onclick="toggleMoreMenu();openAddKennelBlock()">🚧 Block off a kennel</button>
@@ -583,7 +585,7 @@
     </div>
   </div>
 
-  <!-- BOOKINGS PAGE (admin only) -->
+  <!-- BOOKINGS PAGE (admin + limited users, e.g. Troy) -->
   <div id="bookings-view" style="display:none">
     <div class="page-view">
       <div class="card">
@@ -637,6 +639,7 @@
               <input type="checkbox" id="bk-upcoming" onchange="setBkUpcoming(this.checked)" style="width:auto"> Upcoming only
             </label>
           </div>
+          <div id="bk-history-bar" style="display:none"></div>
           <div id="bookings-body"><div class="loading">Loading&hellip;</div></div>
         </div>
       </div>
@@ -773,7 +776,7 @@ const $dash  = document.getElementById('dashboard-view');
 // The invited-users list + roles live in the `app_users` table and are enforced
 // by database row-level security. Admins see every page; "limited" users see
 // only LIMITED_ALLOWED_TABS. Manage users from the Users page (admin only).
-const LIMITED_ALLOWED_TABS = ['overview','invoices','shopping','customers','dogs','cats','reports'];
+const LIMITED_ALLOWED_TABS = ['overview','invoices','shopping','customers','dogs','cats','reports','bookings'];
 let _userRole = 'limited';
 let _userEmail = '';
 
@@ -783,7 +786,7 @@ function applyAccess(){
   const limited = _userRole !== 'admin';
   const topVisible  = { overview:true, schedule:!limited, invoices:true };
   Object.keys(topVisible).forEach(t=>{ const el=document.getElementById('tab-'+t); if(el) el.style.display = topVisible[t] ? '' : 'none'; });
-  const moreVisible = { reminders:!limited, notes:!limited, shopping:true, tasks:!limited, customers:true, dogs:true, reports:true, users:!limited, backup:!limited };
+  const moreVisible = { reminders:!limited, notes:!limited, shopping:true, tasks:!limited, customers:true, dogs:true, reports:true, bookings:true, users:!limited, backup:!limited };
   Object.keys(moreVisible).forEach(t=>{ const el=document.getElementById('more-'+t); if(el) el.style.display = moreVisible[t] ? '' : 'none'; });
 }
 
@@ -2430,6 +2433,7 @@ function bdAnimalCard(g) {
       <span class="bd-animal-name">${cat ? '🐈' : '🐾'} ${bdEsc(g.dog_name)}</span>
       <span class="badge badge-gray" style="font-size:0.68rem">${kLabel(g.kennel_number)}</span>
       ${dog ? `<a class="bd-edit" onclick="closeModal();openDogPage('${dog.id}')">edit ${cat ? 'cat' : 'dog'} details</a>` : ''}
+      ${g.dog_id && isTabAllowed('bookings') ? `<a class="bd-hist" onclick="closeModal();bkShowHistory('dog','${g.dog_id}')" title="Every booking for ${bdEsc(g.dog_name)}">📖 History</a>` : ''}
     </div>
     <div>${bdVaxBadge(dog, g.check_out_date)}</div>
     ${note('Feeding instructions', dog && dog.feeding_instructions)}
@@ -2465,7 +2469,8 @@ function openBookingChooser(bookingId) {
   const b = _bookings.find(x => x.id === bookingId);
   if (!b) return;
   const groupId = b.booking_group_id;
-  const group = groupId ? _bookings.filter(x => x.booking_group_id === groupId) : [b];
+  // Live stay → its live dogs only; a cancelled row → its cancelled siblings only.
+  const group = groupId ? _bookings.filter(x => x.booking_group_id === groupId && (x.status === 'cancelled') === (b.status === 'cancelled')) : [b];
   const cat = isCatBooking(b);
   const owner = b.household_id ? (_households || []).find(h => h.id === b.household_id) : null;
 
@@ -2487,6 +2492,7 @@ function openBookingChooser(bookingId) {
       <div class="bd-line" style="gap:0.5rem">
         <span style="font-weight:600">${owner ? bdEsc(owner.owner_name) : '<span style="color:#94a3b8">(no owner on file)</span>'}</span>
         ${owner ? `<a class="bd-edit" onclick="closeModal();openEditCustomer('${owner.id}')">edit customer</a>` : ''}
+        ${owner && isTabAllowed('bookings') ? `<a class="bd-hist" onclick="closeModal();bkShowHistory('owner','${owner.id}')" title="Every booking for ${bdEsc(owner.owner_name)}">📖 History</a>` : ''}
       </div>
       ${owner && (owner.phone || owner.email)
         ? `<div class="bd-sub">${[owner.phone, owner.email].filter(Boolean).map(bdEsc).join(' · ')}</div>` : ''}
@@ -3051,8 +3057,11 @@ async function manageBookingCheckout(bookingId) {
 
     // Determine the set of bookings to check out (group cascade)
     const groupId = b?.booking_group_id;
+    // Exclude cancelled stub rows (e.g. the dropped days left behind when a stay
+    // is shortened) — they share the group id but must never be checked out or
+    // invoiced. (Bug 2026-10-06: Grace Berikoff's 4-dog stay billed as 8.)
     const groupBookings = groupId
-      ? _bookings.filter(x => x.booking_group_id === groupId)
+      ? _bookings.filter(x => x.booking_group_id === groupId && x.status !== 'cancelled')
       : (b ? [b] : []);
     const bookingIds = groupBookings.map(x => x.id);
     if (!bookingIds.length) bookingIds.push(bookingId);
@@ -6345,6 +6354,68 @@ function bkKennelMatch(b){
 }
 function setBkUpcoming(v){ _bkUpcoming = v; renderBookings(); }
 
+// History mode — opened from the 📖 History buttons in the booking details
+// panel. Narrows the list to one owner (household_id) or one animal (dog_id)
+// and clears the other filters so the whole history shows, newest first.
+let _bkHistKind = null;   // 'owner' | 'dog' | null
+let _bkHistId = null;
+function bkShowHistory(kind, id) {
+  _bkHistKind = kind; _bkHistId = id;
+  _bkSearch = ''; _bkStatus = 'all'; _bkKennel = 'all'; _bkUpcoming = false;
+  const set = (elId, prop, v) => { const el = document.getElementById(elId); if (el) el[prop] = v; };
+  set('bk-search', 'value', ''); set('bk-status', 'value', 'all');
+  set('bk-kennel', 'value', 'all'); set('bk-upcoming', 'checked', false);
+  switchTab('bookings');
+  window.scrollTo(0, 0);
+}
+function bkClearHistory(silent) {
+  _bkHistKind = null; _bkHistId = null;
+  if (!silent) renderBookings();
+}
+function bkHistMatch(b) {
+  if (!_bkHistKind) return true;
+  return _bkHistKind === 'owner' ? b.household_id === _bkHistId : b.dog_id === _bkHistId;
+}
+function bkRenderHistoryBar(rows) {
+  const bar = document.getElementById('bk-history-bar');
+  if (!bar) return;
+  if (!_bkHistKind) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  let label, icon, link = '';
+  if (_bkHistKind === 'owner') {
+    const h = (_households || []).find(x => x.id === _bkHistId);
+    label = h ? h.owner_name : '(unknown owner)'; icon = '👤';
+    if (h) link = `<a class="bd-edit" onclick="openEditCustomer('${h.id}')">edit customer</a>`;
+  } else {
+    const d = (_dogs || []).find(x => x.id === _bkHistId);
+    const any = (_bookings || []).find(x => x.dog_id === _bkHistId);
+    const cat = isCatAnimal(d) || (any && isCatBooking(any));
+    label = d ? d.name : (any ? any.dog_name : '(unknown animal)'); icon = cat ? '🐈' : '🐾';
+    if (d) link = `<a class="bd-edit" onclick="openDogPage('${d.id}')">${cat ? 'cat' : 'dog'} details</a>`;
+  }
+  // Quick totals across the whole history (ignores the other filters).
+  const all = (_bookings || []).filter(bkHistMatch);
+  const stays = all.filter(b => b.status !== 'cancelled');
+  // A multi-dog visit is one stay for the owner (one row per dog in the DB).
+  const visits = rs => new Set(rs.map(b => b.booking_group_id || b.id)).size;
+  const nStays = _bkHistKind === 'owner' ? visits(stays) : stays.length;
+  const cancelled = _bkHistKind === 'owner' ? visits(all.filter(b => b.status === 'cancelled')) : all.length - stays.length;
+  const nights = stays.reduce((n, b) => n + ((b.check_in_date && b.check_out_date) ? diffDays(b.check_in_date, b.check_out_date) + 1 : 0), 0);
+  const first = stays.map(b => b.check_in_date).filter(Boolean).sort()[0];
+  const bits = [`${nStays} stay${nStays === 1 ? '' : 's'}`];
+  if (_bkHistKind === 'dog') bits.push(`${nights} night${nights === 1 ? '' : 's'}`);
+  if (cancelled) bits.push(`${cancelled} cancelled`);
+  if (first) bits.push(`since ${fmtDateY(first)}`);
+  bar.style.display = '';
+  bar.innerHTML = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:0.55rem 0.7rem;margin-bottom:0.75rem">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:0.66rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#7c3aed">${_bkHistKind === 'owner' ? 'Owner history' : 'Booking history'}</div>
+        <div style="font-weight:600;font-size:0.95rem">${icon} ${bdEsc(label)} ${link}</div>
+        <div style="font-size:0.76rem;color:#64748b;margin-top:0.1rem">${bits.join(' · ')}</div>
+      </div>
+      <button class="btn btn-sm btn-secondary" onclick="bkClearHistory()">✕ Show all bookings</button>
+    </div>`;
+}
+
 function bkStatusBadge(status) {
   const map = {
     pending:   ['badge-blue',  'Pending'],
@@ -6363,6 +6434,8 @@ function renderBookings() {
   const q = (_bkSearch || '').trim().toLowerCase();
 
   let rows = [..._bookings];
+  if (_bkHistKind) rows = rows.filter(bkHistMatch);
+  bkRenderHistoryBar(rows);
   if (_bkStatus !== 'all') rows = rows.filter(b => b.status === _bkStatus);
   if (_bkKennel !== 'all') rows = rows.filter(bkKennelMatch);
   if (_bkUpcoming) rows = rows.filter(b => !b.check_out_date || b.check_out_date >= td);
@@ -6395,7 +6468,7 @@ function renderBookings() {
     const owner = (_households || []).find(h => h.id === b.household_id);
     const kennelLabel = kLabel(b.kennel_number);
     const groupCount = b.booking_group_id
-      ? _bookings.filter(x => x.booking_group_id === b.booking_group_id).length
+      ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && (x.status === 'cancelled') === (b.status === 'cancelled')).length
       : 1;
     const groupTag = groupCount > 1 ? ` <span class="badge badge-purple" style="font-size:0.6rem">group of ${groupCount}</span>` : '';
     html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.55rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;background:white;cursor:pointer"
