@@ -321,6 +321,16 @@
     .form-check { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
     .form-check input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6; flex-shrink: 0; }
     .form-check label { font-size: 0.875rem; cursor: pointer; }
+    /* Manage Booking — compact layout */
+    .mb-extras { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 0.75rem; }
+    .mb-hint { color: #94a3b8; font-size: 0.72rem; font-weight: 400; }
+    .mb-extras .form-check label, details.mb-more .form-check label { display: inline; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 0.85rem; color: #1e293b; margin: 0; }
+    .mb-extras .form-check label .mb-hint { text-transform: none; }
+    details.mb-more { border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+    details.mb-more > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600; color: #475569; }
+    details.mb-more[open] > summary { margin-bottom: 0.6rem; }
+    .mb-more-sum { font-weight: 400; color: #94a3b8; }
+    .mb-owner-note { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; border-radius: 6px; padding: 0.45rem 0.7rem; font-size: 0.78rem; margin-bottom: 0.75rem; }
     .form-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
     .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 
@@ -1028,7 +1038,7 @@ async function loadAll() {
     db.from('tasks').select('*').eq('status','active'),
     db.from('reminders').select('*').eq('status','active').order('target_date', {nullsFirst: false}),
     db.from('shopping_items').select('*').eq('status','active').order('list_name').order('item'),
-    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,transfer_group_id,household_id,off_site_pickup)'),
+    db.from('invoices').select('*, bookings(dog_name,kennel_number,check_in_date,check_in_time,check_out_date,check_out_time,booking_group_id,transfer_group_id,household_id,off_site_pickup,owner_booking)'),
     db.from('households').select('*').order('owner_name'),
     db.from('kennels').select('*').order('kennel_number'),
     db.from('dogs').select('*').order('name'),
@@ -1753,6 +1763,9 @@ function stayKey(b, fallbackId) {
 }
 
 function renderInvoices(invoices, bookings) {
+  // Owner bookings never take part in invoicing.
+  invoices = (invoices || []).filter(i => !i.bookings?.owner_booking);
+  bookings = (bookings || []).filter(b => !b.owner_booking);
   const pending     = invoices.filter(i => i.status === 'pending');
   const sent        = invoices.filter(i => i.status === 'sent');
   const invoicedIds = invoices.map(i => i.booking_id);
@@ -2121,7 +2134,7 @@ function setInvFilter(f) {
 }
 
 function renderInvoicePage() {
-  const invoices = _invoices.filter(i =>
+  const invoices = _invoices.filter(i => !i.bookings?.owner_booking).filter(i =>
     _invFilter === 'all' ? i.status !== 'paid' : i.status === _invFilter
   );
   if (!invoices.length) {
@@ -2281,7 +2294,7 @@ async function renderHistoryPage() {
     .eq('status','completed')
     .order('check_out_date', { ascending: false });
 
-  _historyRows = completedBookings || [];
+  _historyRows = (completedBookings || []).filter(b => !b.owner_booking);
   if (!_historyRows.length) {
     document.getElementById('inv-page-body').innerHTML = '<div class="empty">No completed stays yet.</div>';
     return;
@@ -2565,7 +2578,7 @@ function openBookingChooser(bookingId) {
     }
   }
 
-  const body = `<div style="margin-bottom:0.5rem"><span class="badge ${sCls}">${sLabel}</span></div>
+  const body = `<div style="margin-bottom:0.5rem"><span class="badge ${sCls}">${sLabel}</span> ${bookingTypeBadge(b)}</div>
     ${cleanWarn}
     ${ownerSec}
     ${staySec}
@@ -2609,13 +2622,13 @@ function openQuickCheckout(bookingId) {
       <div class="form-check"><input type="checkbox" id="f-outside" ${inv?.outside_window_pickup?'checked':''}><label for="f-outside">🕐 Outside Hours Pickup</label></div>
       <div class="form-check"><input type="checkbox" id="f-dropoff" ${inv?.outside_hours_dropoff?'checked':''}><label for="f-dropoff">🕐 Outside Hours Drop-off</label></div>
     </div>
+    ${b.owner_booking ? `<div class="mb-owner-note">🏠 Owner booking — no invoice will be created.</div>` : ''}
     <div style="font-size:0.74rem;color:#64748b">Changing dates, ${isCatBooking(b) ? 'condos' : 'kennels'}, store purchases or billed days? Use <strong>Edit / Manage Booking</strong> instead.</div>
     <div style="display:none">
       <input type="date" id="f-in-date" value="${b.check_in_date || ''}">
       <input type="time" id="f-in-time" value="${b.check_in_time ? b.check_in_time.slice(0,5) : ''}">
       <input type="checkbox" id="f-pickup" ${b.off_site_pickup ? 'checked' : ''}>
-      <input type="checkbox" id="f-compassionate" ${b.compassionate_care ? 'checked' : ''}>
-      <input type="checkbox" id="f-dogpound" ${b.dog_pound ? 'checked' : ''}>
+      <input type="hidden" id="f-btype" value="${bookingType(b)}">
       <input type="checkbox" id="f-grace">
     </div>`;
 
@@ -2623,6 +2636,63 @@ function openQuickCheckout(bookingId) {
   document.getElementById('modal-footer').innerHTML = `
     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     <button class="btn btn-danger" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">🔴 Check Out</button>`;
+}
+
+// ── BOOKING TYPE ───────────────────────────────────────────────────────
+// Every booking has exactly one type, stored as three booleans on `bookings`:
+//   standard      — normal paid boarding
+//   compassionate — no charge; gets a $0 paid invoice; still counted in Reports
+//   pound         — Village of Fort Simpson dog pound; excluded from boarding stats
+//   owner         — the owner's own animals; NO invoice at all and left out of Reports
+// Bookings for the household flagged `is_owner` default to 'owner'.
+const BOOKING_TYPES = [
+  ['standard',      'Standard boarding'],
+  ['compassionate', '💙 Compassionate Care (no charge)'],
+  ['pound',         '🏛️ Dog Pound — Village of Fort Simpson'],
+  ['owner',         '🏠 Owner booking (no invoice, not in reports)'],
+];
+function bookingType(b) {
+  if (!b) return 'standard';
+  if (b.owner_booking) return 'owner';
+  if (b.compassionate_care) return 'compassionate';
+  if (b.dog_pound) return 'pound';
+  return 'standard';
+}
+function bookingTypeFlags(t) {
+  return { owner_booking: t === 'owner', compassionate_care: t === 'compassionate', dog_pound: t === 'pound' };
+}
+function bookingTypeSelect(id, cur, onchange) {
+  return `<select id="${id}"${onchange ? ` onchange="${onchange}"` : ''}>` +
+    BOOKING_TYPES.map(([v, l]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`).join('') +
+    `</select>`;
+}
+// Reads the type from a <select> or a hidden <input>; null if the field isn't on screen.
+function readBookingType(id = 'f-btype') {
+  const el = document.getElementById(id);
+  return el ? (el.value || 'standard') : null;
+}
+function isOwnerHousehold(hhId) {
+  const h = hhId ? (_households || []).find(x => x.id === hhId) : null;
+  return !!(h && h.is_owner);
+}
+function bookingTypeBadge(b, small) {
+  const st = small ? ' style="font-size:0.6rem"' : '';
+  switch (bookingType(b)) {
+    case 'owner':         return `<span class="badge badge-green"${st}>🏠 Owner</span>`;
+    case 'compassionate': return `<span class="badge badge-blue"${st}>💙 No charge</span>`;
+    case 'pound':         return `<span class="badge badge-gray"${st}>🏛️ Dog pound</span>`;
+    default:              return '';
+  }
+}
+// Manage Booking: show/hide the bits that don't apply to an owner booking.
+function mbTypeChanged() {
+  const owner = readBookingType() === 'owner';
+  const note = document.getElementById('mb-owner-note');
+  const bill = document.getElementById('mb-billing');
+  const cb   = document.getElementById('mb-checkout-btn');
+  if (note) note.style.display = owner ? '' : 'none';
+  if (bill) bill.style.display = owner ? 'none' : '';
+  if (cb && cb.dataset.completed === '1') cb.style.display = owner ? 'none' : '';
 }
 
 // ── SPACES: dog kennels, VIP, and the Cat Condo ───────────────────────
@@ -2816,6 +2886,16 @@ function openLogCheckout(booking) {
       <div id="mb-dog-rows">${group.map(g => mbDogKennelRow(g)).join('')}</div>
     </div>`;
 
+  // Billing section starts collapsed unless it already holds something.
+  const isOwnerBk   = bookingType(b) === 'owner';
+  const mbItemCount = itemsForBooking(b.id).length;
+  const billingOpen = !!(inv?.grace_extension_applied || mbItemCount);
+  const billingSum  = [
+    inv?.days_billed != null ? `${inv.days_billed} day${inv.days_billed === 1 ? '' : 's'} billed` : '',
+    inv?.grace_extension_applied ? 'grace' : '',
+    mbItemCount ? `${mbItemCount} item${mbItemCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).map(x => '· ' + x).join(' ');
+
   const body = groupNotice + dogsBlock + `
     <div class="form-row-2">
       <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
@@ -2825,30 +2905,35 @@ function openLogCheckout(booking) {
       <div class="form-field"><label>Check-out date</label><input type="date" id="f-out-date" value="${b.check_out_date || todayStr()}"></div>
       <div class="form-field"><label>Check-out time</label><input type="time" id="f-out-time" value="${b.check_out_time ? b.check_out_time.slice(0,5) : ''}"></div>
     </div>
-    <div class="form-field">
-      <div class="form-check"><input type="checkbox" id="f-pickup" ${b.off_site_pickup?'checked':''}><label for="f-pickup">🚗 Off-site pickup (collected dog at check-in)</label></div>
-      <div class="form-check"><input type="checkbox" id="f-compassionate" ${b.compassionate_care?'checked':''}><label for="f-compassionate">💙 Compassionate Care (no charge)</label></div>
-      <div class="form-check"><input type="checkbox" id="f-dogpound" ${b.dog_pound?'checked':''}><label for="f-dogpound">🏛️ Dog Pound — Village of Fort Simpson (excluded from boarding stats)</label></div>
-      <div class="form-check"><input type="checkbox" id="f-offsite" ${inv?.off_site_delivery?'checked':''}><label for="f-offsite">🚗 Off-site delivery (dropping dog off at checkout)</label></div>
-      <div class="form-check"><input type="checkbox" id="f-outside" ${inv?.outside_window_pickup?'checked':''}><label for="f-outside">🕐 Outside Hours Pickup</label></div>
-      <div class="form-check"><input type="checkbox" id="f-dropoff" ${inv?.outside_hours_dropoff?'checked':''}><label for="f-dropoff">🕐 Outside Hours Drop-off</label></div>
-      <div class="form-check"><input type="checkbox" id="f-grace" onchange="toggleGraceNotes(this)"><label for="f-grace">Grace extension applied</label></div>
+    <div class="form-field"><label>Booking type</label>${bookingTypeSelect('f-btype', bookingType(b), 'mbTypeChanged()')}</div>
+    <div class="form-field"><label>Extras</label>
+      <div class="mb-extras">
+        <div class="form-check"><input type="checkbox" id="f-pickup" ${b.off_site_pickup?'checked':''}><label for="f-pickup">🚗 Off-site pickup <span class="mb-hint">at check-in</span></label></div>
+        <div class="form-check"><input type="checkbox" id="f-offsite" ${inv?.off_site_delivery?'checked':''}><label for="f-offsite">🚗 Off-site delivery <span class="mb-hint">at checkout</span></label></div>
+        <div class="form-check"><input type="checkbox" id="f-dropoff" ${inv?.outside_hours_dropoff?'checked':''}><label for="f-dropoff">🕐 Outside hours drop-off</label></div>
+        <div class="form-check"><input type="checkbox" id="f-outside" ${inv?.outside_window_pickup?'checked':''}><label for="f-outside">🕐 Outside hours pickup</label></div>
+      </div>
     </div>
-    <div class="form-field" id="f-grace-notes-field" style="display:none">
-      <label>Grace extension notes</label>
-      <input type="text" id="f-grace-notes" placeholder="e.g. Extended to 19:30">
-    </div>
-    <div class="form-field">
-      <label>Billed days (override)</label>
-      <input type="number" id="f-days-override" min="0" step="1" value="${inv?.days_billed ?? ''}" placeholder="auto from dates">
-      <div style="font-size:0.72rem;color:#64748b;margin-top:0.15rem">Correct an invoiced/paid stay here (e.g. grace extension dropped a day). Updates the invoice on Save.</div>
-    </div>
-    <div class="form-field">
-      <label>Store purchases / invoice items</label>
-      <div id="mb-items">${invoiceItemsHTML(b.id, 'mb-items')}</div>
-    </div>`;
+    <div id="mb-owner-note" class="mb-owner-note" style="${isOwnerBk ? '' : 'display:none'}">🏠 Owner booking — no invoice is created at check-out and the stay is left out of Reports.</div>
+    <details id="mb-billing" class="mb-more"${billingOpen ? ' open' : ''} style="${isOwnerBk ? 'display:none' : ''}">
+      <summary>Billing adjustments &amp; store items <span class="mb-more-sum">${billingSum}</span></summary>
+      <div class="form-check"><input type="checkbox" id="f-grace" onchange="toggleGraceNotes(this)" ${inv?.grace_extension_applied?'checked':''}><label for="f-grace">Grace extension applied</label></div>
+      <div class="form-field" id="f-grace-notes-field" style="${inv?.grace_extension_applied ? '' : 'display:none'}">
+        <label>Grace extension notes</label>
+        <input type="text" id="f-grace-notes" placeholder="e.g. Extended to 19:30" value="${(inv?.grace_extension_notes || '').replace(/"/g,'&quot;')}">
+      </div>
+      <div class="form-field">
+        <label>Billed days (override)</label>
+        <input type="number" id="f-days-override" min="0" step="1" value="${inv?.days_billed ?? ''}" placeholder="auto from dates">
+        <div style="font-size:0.72rem;color:#64748b;margin-top:0.15rem">Correct an invoiced/paid stay here (e.g. grace extension dropped a day). Updates the invoice on Save.</div>
+      </div>
+      <div class="form-field" style="margin-bottom:0">
+        <label>Store purchases / invoice items</label>
+        <div id="mb-items">${invoiceItemsHTML(b.id, 'mb-items')}</div>
+      </div>
+    </details>`;
 
-  openModal('Manage Booking: ' + b.dog_name + ' — K' + b.kennel_number, body, null);
+  openModal('Manage Booking: ' + b.dog_name + ' — ' + kLabel(b.kennel_number), body, null);
 
   const checkoutLabel = isCompleted ? 'Create Invoice' : 'Check Out';
   const cancelBtn = !isCompleted
@@ -2867,7 +2952,7 @@ function openLogCheckout(booking) {
     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     ${transferBtn}
     <button class="btn btn-primary" id="mb-save-btn" onclick="manageBookingSave('${b.id}')">Save changes</button>
-    <button class="btn btn-secondary" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">${checkoutLabel}</button>`;
+    <button class="btn btn-secondary" id="mb-checkout-btn" data-completed="${isCompleted ? '1' : '0'}" onclick="manageBookingCheckout('${b.id}')" style="${isCompleted && isOwnerBk ? 'display:none' : ''}">${checkoutLabel}</button>`;
 }
 
 async function manageBookingSave(bookingId) {
@@ -2980,18 +3065,31 @@ async function manageBookingSave(bookingId) {
 
     // Save off_site_pickup flag on the booking(s)
     const pickupEl = document.getElementById('f-pickup');
+    const btype = readBookingType();
     if (pickupEl !== null) {
       const pickup = pickupEl.checked;
-      const compEl = document.getElementById('f-compassionate');
-      const dpEl = document.getElementById('f-dogpound');
-      let pickupUpd = db.from('bookings').update({ off_site_pickup: pickup, compassionate_care: compEl ? compEl.checked : false, dog_pound: dpEl ? dpEl.checked : false });
+      let pickupUpd = db.from('bookings').update({ off_site_pickup: pickup, ...(btype ? bookingTypeFlags(btype) : {}) });
       if (b && b.booking_group_id) pickupUpd = pickupUpd.eq('booking_group_id', b.booking_group_id).neq('status', 'cancelled');
       else pickupUpd = pickupUpd.eq('id', bookingId);
-      await pickupUpd;
+      const { error: puErr } = await pickupUpd;
+      if (puErr) throw puErr;
+    }
+
+    // Owner bookings are never invoiced. If this stay was already invoiced before
+    // being switched to Owner, offer to remove those invoices.
+    if (btype === 'owner') {
+      const stayIds = (b && b.booking_group_id)
+        ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled').map(x => x.id)
+        : [bookingId];
+      const stayInvs = (_invoices || []).filter(i => stayIds.includes(i.booking_id));
+      if (stayInvs.length && confirm(`This stay already has ${stayInvs.length} invoice${stayInvs.length === 1 ? '' : 's'}. Owner bookings aren't invoiced — remove ${stayInvs.length === 1 ? 'it' : 'them'}?`)) {
+        const { error: diErr } = await db.from('invoices').delete().in('id', stayInvs.map(i => i.id));
+        if (diErr) throw diErr;
+      }
     }
 
     // Retroactive billing: update existing invoice if dates changed (or days overridden)
-    if (inDate && outDate) {
+    if (inDate && outDate && btype !== 'owner') {
       const ovEl = document.getElementById('f-days-override');
       const hasOv = ovEl && ovEl.value !== '' && !isNaN(parseInt(ovEl.value, 10));
       const days  = hasOv ? parseInt(ovEl.value, 10) : computeBillingDays(inDate, inTime, outDate, outTime);
@@ -3001,7 +3099,7 @@ async function manageBookingSave(bookingId) {
       const dropoff    = document.getElementById('f-dropoff').checked;
       const grace      = document.getElementById('f-grace').checked;
       const graceNotes = document.getElementById('f-grace-notes')?.value || null;
-      const compChecked = document.getElementById('f-compassionate')?.checked ?? false;
+      const compChecked = btype === 'compassionate';
       const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bookingId).maybeSingle();
       if (inv) {
         const invPatch = {
@@ -3046,8 +3144,10 @@ async function manageBookingCheckout(bookingId) {
     const dropoff  = document.getElementById('f-dropoff').checked;
     const grace    = document.getElementById('f-grace').checked;
     const graceNotes = document.getElementById('f-grace-notes')?.value || null;
-    const compassionate = document.getElementById('f-compassionate')?.checked ?? false;
-    const dogpound      = document.getElementById('f-dogpound')?.checked ?? false;
+    const btype         = readBookingType() || bookingType(b);
+    const compassionate = btype === 'compassionate';
+    const dogpound      = btype === 'pound';
+    const ownerBk       = btype === 'owner';
 
     if (!outTime) throw new Error('Check-out time is required');
 
@@ -3073,6 +3173,7 @@ async function manageBookingCheckout(bookingId) {
       off_site_pickup: pickup,
       compassionate_care: compassionate,
       dog_pound: dogpound,
+      owner_booking: ownerBk,
       status: 'completed',
       updated_at: new Date().toISOString(),
     }).in('id', bookingIds);
@@ -3086,7 +3187,12 @@ async function manageBookingCheckout(bookingId) {
       grace_extension_applied: grace, grace_extension_notes: graceNotes,
       invoice_date: invDate,
     };
-    for (const bid of bookingIds) {
+    // Owner's own animals: no invoice at all (clear any stray one) — skip billing.
+    if (ownerBk) {
+      const { error: oiErr } = await db.from('invoices').delete().in('booking_id', bookingIds);
+      if (oiErr) throw oiErr;
+    }
+    for (const bid of (ownerBk ? [] : bookingIds)) {
       const { data: inv } = await db.from('invoices').select('id').eq('booking_id', bid).maybeSingle();
       if (compassionate) {
         // No-charge stay -- still create/update the invoice so it counts in
@@ -3136,7 +3242,7 @@ async function manageBookingCheckout(bookingId) {
     const dogLabel = groupBookings.length > 1
       ? groupBookings.map(x => x.dog_name).join(' + ')
       : (b?.dog_name || 'Dog');
-    showToast(`${dogLabel} checked out · Invoice due ${fmtDate(invDate)}`);
+    showToast(ownerBk ? `${dogLabel} checked out · owner booking, no invoice` : `${dogLabel} checked out · Invoice due ${fmtDate(invDate)}`);
     await loadAll();
   } catch(e) {
     showToast(e.message || 'Error', 'error');
@@ -4077,10 +4183,11 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       <div class="form-field"><label>Check-out date *</label><input type="date" id="f-cout-date"></div>
       <div class="form-field"><label>Check-out time</label><input type="time" id="f-cout-time"></div>
     </div>
-    <div class="form-field">
+    <div class="form-field mb-extras">
       <div class="form-check"><input type="checkbox" id="f-shared"><label for="f-shared">⚠ Shared kennel/condo — owner insists (rare exception)</label></div>
-      <div class="form-check"><input type="checkbox" id="f-comp-new"><label for="f-comp-new">💙 Compassionate Care (no charge)</label></div>
-      <div class="form-check"><input type="checkbox" id="f-dogpound-new"><label for="f-dogpound-new">🏛️ Dog Pound — Village of Fort Simpson</label></div>
+    </div>
+    <div class="form-field"><label>Booking type</label>${bookingTypeSelect('f-btype-new', 'standard')}
+      <div class="mb-hint" style="margin-top:0.2rem">Picking the Owner customer switches this to Owner automatically.</div>
     </div>
     <div class="form-field"><label>Notes</label><textarea id="f-notes" rows="2" placeholder="Optional"></textarea></div>`;
 
@@ -4194,12 +4301,12 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
 
     // Multi-dog bookings share a booking_group_id so future edits cascade
     const groupId = dogs.length > 1 ? crypto.randomUUID() : null;
-    const abComp = document.getElementById('f-comp-new')?.checked || false;
-    const abDp   = document.getElementById('f-dogpound-new')?.checked || false;
+    let abType = readBookingType('f-btype-new') || 'standard';
+    if (abType === 'standard' && isOwnerHousehold(householdId)) abType = 'owner';
+    const abFlags = bookingTypeFlags(abType);
     const rowsToInsert = dogs.map(d => ({
       dog_name: d.name,
-      compassionate_care: abComp,
-      dog_pound: abDp,
+      ...abFlags,
       dog_id:   d.dogId || null,
       kennel_number: d.kennel,
       check_in_date: cinDate,
@@ -4255,7 +4362,12 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     const sel = document.querySelector('.ab-dog-row[data-row="0"] .ab-dog-kennel');
     if (sel) sel.value = String(defaultKennel);
   }
-  ownerPickerInit('ab-owner', { allowEmpty: true });
+  ownerPickerInit('ab-owner', { allowEmpty: true, onSelectExisting: (h) => {
+    const sel = document.getElementById('f-btype-new');
+    if (!sel) return;
+    if (h && h.is_owner) sel.value = 'owner';
+    else if (sel.value === 'owner') sel.value = 'standard';
+  } });
   // Live vaccination check: re-validate dog fields whenever the booking dates change.
   ['f-cin-date','f-cout-date'].forEach(id => {
     const el = document.getElementById(id);
@@ -6470,7 +6582,7 @@ function renderBookings() {
     const groupCount = b.booking_group_id
       ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && (x.status === 'cancelled') === (b.status === 'cancelled')).length
       : 1;
-    const groupTag = groupCount > 1 ? ` <span class="badge badge-purple" style="font-size:0.6rem">group of ${groupCount}</span>` : '';
+    const groupTag = (groupCount > 1 ? ` <span class="badge badge-purple" style="font-size:0.6rem">group of ${groupCount}</span>` : '') + (bookingTypeBadge(b, true) ? ' ' + bookingTypeBadge(b, true) : '');
     html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.55rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;background:white;cursor:pointer"
                   onclick="openBookingChooser('${b.id}')"
                   onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
@@ -6747,6 +6859,8 @@ function getPriorRange(start,end){
 }
 
 function computeReportMetrics(start,end){
+  // The owner's own animals (owner_booking) are left out of every report figure.
+  const repBookings = (_bookings || []).filter(b => !b.owner_booking);
   const grp = b => b.booking_group_id || b.id;
   const inP = d => d && d>=start && d<=end;
   const overlaps = b => b.check_in_date && b.check_out_date && b.check_in_date<=end && b.check_out_date>=start;
@@ -6754,7 +6868,7 @@ function computeReportMetrics(start,end){
 
   // Cat-condo stays are reported separately so the kennel KPIs (occupancy,
   // kennel-nights, busiest kennel) keep meaning what they always did.
-  const allBoarding     = _bookings.filter(b => b.status!=='cancelled' && !b.dog_pound);
+  const allBoarding     = repBookings.filter(b => b.status!=='cancelled' && !b.dog_pound);
   const boarding        = allBoarding.filter(b => !isCatBooking(b));
   const catBoarding     = allBoarding.filter(b =>  isCatBooking(b));
   const boardingOverlap = boarding.filter(overlaps);
@@ -6845,7 +6959,7 @@ function computeReportMetrics(start,end){
     checkins: boarding.filter(b=>inP(b.check_in_date)).length,
     checkouts: boarding.filter(b=>inP(b.check_out_date)).length,
     bookings: bookingsCount,
-    cancellations: new Set(_bookings.filter(b=> b.status==='cancelled' && !b.dog_pound && !isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
+    cancellations: new Set(repBookings.filter(b=> b.status==='cancelled' && !b.dog_pound && !isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
     daysBooked: knSet.size,
     occupancy: periodDays? (stdSet.size/(10*periodDays))*100 : 0,
     cleanings: cleaningsDone.length,
@@ -6860,9 +6974,9 @@ function computeReportMetrics(start,end){
     peakDogs,
     peakDate,
     avgDogsPerBooking: bookingsCount? boardingOverlap.length/bookingsCount : 0,
-    newCustomers: _households.filter(h=> h.created_at && inP(h.created_at.slice(0,10))).length,
+    newCustomers: _households.filter(h=> !h.is_owner && h.created_at && inP(h.created_at.slice(0,10))).length,
     compassionate: new Set(boardingOverlap.filter(b=>b.compassionate_care).map(grp)).size,
-    poundStays: new Set(_bookings.filter(b=> b.dog_pound && b.status!=='cancelled' && overlaps(b)).map(grp)).size,
+    poundStays: new Set(repBookings.filter(b=> b.dog_pound && b.status!=='cancelled' && overlaps(b)).map(grp)).size,
     busiestLabel: busiest ? kLabel(busiest) : '—',
     busiestN,
     invoices: invInP.length,
@@ -6877,7 +6991,7 @@ function computeReportMetrics(start,end){
     catCheckins: catBoarding.filter(b=>inP(b.check_in_date)).length,
     catCheckouts: catBoarding.filter(b=>inP(b.check_out_date)).length,
     catBookings: new Set(catOverlap.map(grp)).size,
-    catCancellations: new Set(_bookings.filter(b=> b.status==='cancelled' && isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
+    catCancellations: new Set(repBookings.filter(b=> b.status==='cancelled' && isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
     catCondoNights: catUnitSet.size,
     catOccupancy: periodDays? (catUnitSet.size/(6*periodDays))*100 : 0,
     catAvgStay: catStayN? catStaySum/catStayN : 0,
@@ -6988,7 +7102,7 @@ function renderReports(){
      <div class="rep-kpi-grid">${insights}</div>
      ${catBlock}
      <div style="font-size:0.72rem;color:#94a3b8;margin-top:1rem;line-height:1.5">
-       Boarding counts exclude cancelled bookings and Village dog-pound stays; compassionate (no-charge) stays are included.
+       Boarding counts exclude cancelled bookings, Village dog-pound stays and Owner bookings; compassionate (no-charge) stays are included.
        Cat-condo stays are reported in their own section and are left out of every kennel figure above (Top 5 Customers is the one exception — it counts a customer's cats and dogs together).
        A stay occupies its kennel from check-in through check-out (last night). "Days Booked" counts distinct kennel-nights, so dogs sharing a kennel are not double-counted.
      </div>`;
