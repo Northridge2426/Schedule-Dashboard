@@ -330,6 +330,16 @@
     details.mb-more > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600; color: #475569; }
     details.mb-more[open] > summary { margin-bottom: 0.6rem; }
     .mb-more-sum { font-weight: 400; color: #94a3b8; }
+    /* Transferred stay: kennel timeline */
+    .st-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.5rem 0.65rem; margin: 0.4rem 0 0.2rem; font-size: 0.8rem; }
+    .st-title, .st-sub { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 0.25rem; }
+    .st-sub { margin-top: 0.5rem; }
+    .st-leg { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.12rem 0; color: #334155; }
+    .st-leg.st-cur { font-weight: 600; color: #0f172a; }
+    .st-k { min-width: 3.2rem; font-weight: 600; }
+    .st-n { margin-left: auto; color: #94a3b8; font-size: 0.74rem; font-weight: 400; }
+    .st-tr { padding: 0.12rem 0; color: #334155; line-height: 1.35; }
+    .st-noreason { color: #94a3b8; font-style: italic; }
     .mb-owner-note { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; border-radius: 6px; padding: 0.45rem 0.7rem; font-size: 0.78rem; margin-bottom: 0.75rem; }
     .form-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
     .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
@@ -1032,7 +1042,7 @@ function showToast(msg, type = 'success') {
 async function loadAll() {
   document.getElementById('today-chip').textContent = todayFull();
 
-  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks, rNotes, rNoteCats, rInvItems] = await Promise.all([
+  const [rBook, rClean, rTask, rRemind, rShop, rInv, rHouse, rKen, rDogs, rRout, rBlocks, rNotes, rNoteCats, rInvItems, rTransfers] = await Promise.all([
     db.from('bookings').select('*').order('check_in_date'),
     db.from('cleanings').select('*').order('scheduled_date'),
     db.from('tasks').select('*').eq('status','active'),
@@ -1047,6 +1057,7 @@ async function loadAll() {
     db.from('notes').select('*').eq('status','active').order('created_at', {ascending: false}),
     db.from('note_categories').select('*').order('sort_order').order('name'),
     db.from('invoice_items').select('*').order('created_at'),
+    db.from('booking_transfers').select('*').order('transfer_date'),
   ]);
 
   _bookings     = rBook.data   || [];
@@ -1063,6 +1074,7 @@ async function loadAll() {
   _notes        = rNotes.data  || [];
   _noteCategories = rNoteCats.data || [];
   _invoiceItems = rInvItems.data || [];
+  _transfers    = (rTransfers && rTransfers.data) || [];
 
   // Keep cancelled bookings visible: if a real booking now overlaps a cancellation in
   // the same kennel, move the cancellation to a spare kennel so both still render.
@@ -1213,7 +1225,7 @@ async function autoScheduleCleanings() {
     if (c.booking_id) {
       const lb = bookingById[c.booking_id];
       if (lb && lb.check_out_date) coveredKennelCheckouts.add(`${c.kennel_number}|${lb.check_out_date}`);
-      if (lb && lb.booking_group_id) coveredGroupIds.add(lb.booking_group_id);
+      if (lb && lb.booking_group_id) coveredGroupIds.add(`${lb.booking_group_id}|${c.kennel_number}`);
     } else if (c.scheduled_date) {
       coveredKennelCheckouts.add(`${c.kennel_number}|${c.scheduled_date}`);
     }
@@ -1225,7 +1237,10 @@ async function autoScheduleCleanings() {
     if (!b.check_out_date) continue;
     if (b.check_out_date < td) continue;  // checkout already passed — no cleaning needed
     if (b.check_out_date < b.check_in_date) continue;  // split/shortened booking artifact
-    if (b.booking_group_id && coveredGroupIds.has(b.booking_group_id)) continue;  // sibling dog in this group already covered
+    // Sibling dog in this group already covered IN THIS KENNEL. Keyed by group+kennel:
+    // a group spread over several kennels needs one cleaning per kennel. (Bug
+    // 2026-10-15: keyed by group alone, Owner trip got K5's cleaning but not K6/K7.)
+    if (b.booking_group_id && coveredGroupIds.has(`${b.booking_group_id}|${b.kennel_number}`)) continue;
     if (coveredKennelCheckouts.has(`${b.kennel_number}|${b.check_out_date}`)) continue;
     toCreate.push({
       kennel_number: b.kennel_number,
@@ -1238,7 +1253,7 @@ async function autoScheduleCleanings() {
     // Mark this kennel+checkout (and group) covered so sibling dogs in the same
     // multi-dog booking don't each spawn their own cleaning (one cleaning per kennel).
     coveredKennelCheckouts.add(`${b.kennel_number}|${b.check_out_date}`);
-    if (b.booking_group_id) coveredGroupIds.add(b.booking_group_id);
+    if (b.booking_group_id) coveredGroupIds.add(`${b.booking_group_id}|${b.kennel_number}`);
   }
   if (toCreate.length) {
     // Plain insert (not upsert): the partial unique index on (kennel_number,
@@ -1769,7 +1784,18 @@ function renderInvoices(invoices, bookings) {
   const pending     = invoices.filter(i => i.status === 'pending');
   const sent        = invoices.filter(i => i.status === 'sent');
   const invoicedIds = invoices.map(i => i.booking_id);
-  const needInvoice = bookings.filter(b => b.status === 'completed' && !invoicedIds.includes(b.id));
+  // A transferred stay is invoiced once, on its last leg: an earlier leg never
+  // needs its own invoice, and nothing is due until the whole stay is over.
+  const needInvoice = bookings.filter(b => {
+    if (b.status !== 'completed' || invoicedIds.includes(b.id)) return false;
+    const legs = stayLegs(b);
+    if (legs.length > 1) {
+      if (legs.some(x => invoicedIds.includes(x.id))) return false;
+      if (legs.some(x => x.status !== 'completed')) return false;
+      if (legs[legs.length - 1].id !== b.id) return false;
+    }
+    return true;
+  });
   const ownerOf = hhId => {
     const h = hhId ? (_households || []).find(x => x.id === hhId) : null;
     return h ? h.owner_name : (hhId ? '(Unknown owner)' : 'Unassigned');
@@ -2221,11 +2247,15 @@ function renderInvoicePage() {
 
       // A transferred stay: same dog, several kennels, one bill.
       const isTransferStay = invs.length > 1 && new Set(invs.map(i => i.bookings?.dog_name)).size === 1;
+      // One invoice covering a whole transferred stay (billed on its last leg):
+      // show the stay's full dates and kennels, not just the last leg's.
+      const _invBk  = invs.length === 1 ? (_bookings || []).find(x => x.id === anyI.booking_id) : null;
+      const _trSr   = _invBk && isTransferredStay(_invBk) ? stayRange(_invBk) : null;
       // Dates span the whole stay, not just the first segment.
-      const spanIn  = invs.map(i => i.bookings?.check_in_date).filter(Boolean).sort()[0] || anyB.check_in_date;
-      const spanOut = invs.map(i => i.bookings?.check_out_date).filter(Boolean).sort().slice(-1)[0] || anyB.check_out_date;
-      const spanInB  = invs.find(i => i.bookings?.check_in_date  === spanIn)?.bookings  || anyB;
-      const spanOutB = invs.find(i => i.bookings?.check_out_date === spanOut)?.bookings || anyB;
+      const spanIn  = _trSr ? _trSr.start : (invs.map(i => i.bookings?.check_in_date).filter(Boolean).sort()[0] || anyB.check_in_date);
+      const spanOut = _trSr ? _trSr.end   : (invs.map(i => i.bookings?.check_out_date).filter(Boolean).sort().slice(-1)[0] || anyB.check_out_date);
+      const spanInB  = _trSr ? { check_in_time: _trSr.startTime } : (invs.find(i => i.bookings?.check_in_date  === spanIn)?.bookings  || anyB);
+      const spanOutB = _trSr ? { check_out_time: _trSr.endTime }  : (invs.find(i => i.bookings?.check_out_date === spanOut)?.bookings || anyB);
       const totalDays = invs.reduce((t, i) => t + (i.days_billed || 0), 0);
 
       // Bulk-action buttons when the group has >1 dog
@@ -2246,6 +2276,7 @@ function renderInvoicePage() {
           <div>Invoice date: ${fmtDate(anyI.invoice_date)}</div>
           <div>${isTransferStay
             ? `${invs.length} kennels · ${totalDays} day${totalDays === 1 ? '' : 's'} total`
+            : _trSr ? `⇄ ${stayKennelsLabel(_invBk)} · ${totalDays} day${totalDays === 1 ? '' : 's'}`
             : `${invs.length} dog${invs.length !== 1 ? 's' : ''}`}</div>
         </div>
         ${(anyPickup || anyOffsite || anyOutside || anyDropoff || anyGrace) ? `<div style="margin-bottom:0.5rem">
@@ -2294,7 +2325,19 @@ async function renderHistoryPage() {
     .eq('status','completed')
     .order('check_out_date', { ascending: false });
 
-  _historyRows = (completedBookings || []).filter(b => !b.owner_booking);
+  // A transferred stay shows as one row (its last leg, spanning the whole stay)
+  // unless its legs were invoiced separately (older stays).
+  const _hasInv = id => (_invoices || []).some(i => i.booking_id === id);
+  _historyRows = (completedBookings || []).filter(b => !b.owner_booking).filter(b => {
+    const legs = stayLegs(b);
+    if (legs.length < 2 || legs.some(x => x.id !== legs[legs.length - 1].id && _hasInv(x.id))) return true;
+    return legs[legs.length - 1].id === b.id;
+  }).map(b => {
+    const legs = stayLegs(b);
+    if (legs.length < 2 || legs[legs.length - 1].id !== b.id || legs.some(x => x.id !== b.id && _hasInv(x.id))) return b;
+    const r = stayRange(b);
+    return { ...b, check_in_date: r.start, check_in_time: r.startTime, _kennelsLabel: stayKennelsLabel(b) };
+  });
   if (!_historyRows.length) {
     document.getElementById('inv-page-body').innerHTML = '<div class="empty">No completed stays yet.</div>';
     return;
@@ -2334,7 +2377,7 @@ async function renderHistoryPage() {
         : '—';
       html += `<tr>
         <td><strong>${b.dog_name}</strong></td>
-        <td>${kLabel(b.kennel_number)}</td>
+        <td>${b._kennelsLabel || kLabel(b.kennel_number)}</td>
         <td style="white-space:nowrap">${b.check_in_date ? fmtDate(b.check_in_date) : '—'}${b.check_in_time ? ' ' + fmtTime(b.check_in_time) : ''}</td>
         <td style="white-space:nowrap">${fmtDate(b.check_out_date)}${b.check_out_time ? ' ' + fmtTime(b.check_out_time) : ''}</td>
         <td>${inv?.days_billed ?? '—'}</td>
@@ -2479,8 +2522,12 @@ async function bdRefreshAnimals(ids, bookingIds) {
 // buttons actually used every day (Check In, Check Out). Rarely-used editing
 // lives behind "Edit / Manage Booking".
 function openBookingChooser(bookingId) {
-  const b = _bookings.find(x => x.id === bookingId);
-  if (!b) return;
+  const b0 = _bookings.find(x => x.id === bookingId);
+  if (!b0) return;
+  // A transferred stay is ONE booking to a person: whichever leg was clicked,
+  // open on the current leg and show the whole stay.
+  const b = b0.status === 'cancelled' ? b0 : stayCurrentLeg(b0);
+  bookingId = b.id;
   const groupId = b.booking_group_id;
   // Live stay → its live dogs only; a cancelled row → its cancelled siblings only.
   const group = groupId ? _bookings.filter(x => x.booking_group_id === groupId && (x.status === 'cancelled') === (b.status === 'cancelled')) : [b];
@@ -2498,7 +2545,8 @@ function openBookingChooser(bookingId) {
   const when = (d, t) => d
     ? `${fmtDateY(d)}${t ? ' · ' + fmtTime(t) : ' · <span style="color:#94a3b8">time not set</span>'}`
     : '—';
-  const nights = (b.check_in_date && b.check_out_date) ? diffDays(b.check_in_date, b.check_out_date) + 1 : null;
+  const _sr = stayRange(b);
+  const nights = (_sr.start && _sr.end) ? diffDays(_sr.start, _sr.end) + 1 : null;
 
   const ownerSec = `<div class="bd-sec">
       <div class="bd-sec-title">Owner</div>
@@ -2513,22 +2561,11 @@ function openBookingChooser(bookingId) {
 
   const staySec = `<div class="bd-sec">
       <div class="bd-sec-title">Stay</div>
-      <div class="bd-line"><span class="bd-key">From</span><span>${when(b.check_in_date, b.check_in_time)}</span></div>
-      <div class="bd-line"><span class="bd-key">To</span><span>${when(b.check_out_date, b.check_out_time)}</span></div>
+      <div class="bd-line"><span class="bd-key">From</span><span>${when(_sr.start, _sr.startTime)}</span></div>
+      <div class="bd-line"><span class="bd-key">To</span><span>${when(_sr.end, _sr.endTime)}</span></div>
       ${nights ? `<div class="bd-sub">${nights} night${nights === 1 ? '' : 's'}${group.length > 1 ? ` · group booking (${group.length} ${cat ? 'animals' : 'dogs'})` : ''}</div>` : ''}
-      ${(() => {
-        // A transferred stay is stored as several bookings; show the other legs so
-        // the split across kennels (and across invoices) isn't a surprise.
-        if (!b.transfer_group_id) return '';
-        const segs = (_bookings || []).filter(x => x.transfer_group_id === b.transfer_group_id)
-          .sort((x, y) => (x.check_in_date || '').localeCompare(y.check_in_date || ''));
-        if (segs.length < 2) return '';
-        return `<div class="bd-note-label">Transferred stay — ${segs.length} kennels</div>
-          <div class="bd-note">${segs.map(sg =>
-            `${kLabel(sg.kennel_number)}: ${fmtDate(sg.check_in_date)} → ${fmtDate(sg.check_out_date)}${sg.id === b.id ? ' (this one)' : ''}`).join('<br>')}
-          <div style="font-size:0.76rem;color:#64748b;margin-top:0.2rem">Billed as one stay — marking the invoice settles every leg.</div></div>`;
-      })()}
-      ${b.notes ? `<div class="bd-note-label">Booking notes</div><div class="bd-note">${bdEsc(b.notes)}</div>` : ''}
+      ${stayTimelineHTML(b, b.id)}
+      ${cleanBookingNotes(b.notes) ? `<div class="bd-note-label">Booking notes</div><div class="bd-note">${bdEsc(cleanBookingNotes(b.notes))}</div>` : ''}
     </div>`;
 
   const animalsSec = `<div class="bd-sec">
@@ -2636,6 +2673,102 @@ function openQuickCheckout(bookingId) {
   document.getElementById('modal-footer').innerHTML = `
     <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     <button class="btn btn-danger" id="mb-checkout-btn" onclick="manageBookingCheckout('${b.id}')">🔴 Check Out</button>`;
+}
+
+// ── TRANSFERRED STAYS ──────────────────────────────────────────────────
+// A kennel transfer splits one stay into several booking rows ("legs") that
+// share transfer_group_id — one leg per kennel. The legs stay separate in the
+// database (calendar, cleanings and kennel-nights need them), but wherever a
+// person looks at the stay it is shown as ONE booking: whole date range, with
+// the kennels and transfer reasons listed inside it. Reasons live in the
+// booking_transfers table (internal only).
+var _transfers = [];
+function stayLegs(b) {
+  if (!b) return [];
+  if (!b.transfer_group_id || b.status === 'cancelled') return [b];
+  const legs = (_bookings || []).filter(x => x.transfer_group_id === b.transfer_group_id && x.status !== 'cancelled');
+  if (!legs.length) return [b];
+  return legs.sort((x, y) => (x.check_in_date || '').localeCompare(y.check_in_date || '')
+                          || (x.check_out_date || '').localeCompare(y.check_out_date || ''));
+}
+function isTransferredStay(b) { return stayLegs(b).length > 1; }
+// The leg a person means when they open the stay: the one in progress, else the
+// next upcoming one, else (stay finished) the last one.
+function stayCurrentLeg(b) {
+  const legs = stayLegs(b);
+  if (legs.length < 2) return b;
+  return legs.find(x => x.status === 'active')
+      || legs.find(x => x.status === 'pending')
+      || legs[legs.length - 1];
+}
+function stayRange(b) {
+  const legs = stayLegs(b);
+  if (!legs.length) return { legs: [], start: null, startTime: null, end: null, endTime: null };
+  const f = legs[0], l = legs[legs.length - 1];
+  // Transfers before 2026-10-15 left the original check-in time on the moved leg.
+  const startTime = f.check_in_time || (legs.length > 1 ? (legs.slice(1).map(x => x.check_in_time).find(Boolean) || null) : null);
+  return { legs, start: f.check_in_date, startTime, end: l.check_out_date, endTime: l.check_out_time };
+}
+function stayKennelsLabel(b) {
+  return stayLegs(b).map(x => kLabel(x.kennel_number)).filter((v, i, a) => i === 0 || v !== a[i - 1]).join(' → ');
+}
+function stayTransfers(b) {
+  const legs = stayLegs(b);
+  const ids = new Set(legs.map(x => x.id));
+  const tg = b && b.status !== 'cancelled' ? b.transfer_group_id : null;
+  return (_transfers || []).filter(t => (tg && t.transfer_group_id === tg) || ids.has(t.booking_id))
+    .sort((x, y) => (x.transfer_date || '').localeCompare(y.transfer_date || '') || (x.created_at || '').localeCompare(y.created_at || ''));
+}
+// Where billing starts at checkout. A transferred stay is billed as one stay
+// from its first night — unless an earlier leg was already invoiced on its own
+// (stays before 2026-10-15 were sometimes billed per kennel).
+function stayBillingStart(b, inDate, inTime) {
+  const legs = stayLegs(b);
+  if (legs.length < 2 || !b) return { date: inDate, time: inTime };
+  const otherInvoiced = legs.some(x => x.id !== b.id && (_invoices || []).some(i => i.booking_id === x.id));
+  if (otherInvoiced) return { date: inDate, time: inTime };
+  const r = stayRange(b);
+  return { date: r.start || inDate, time: r.startTime || inTime };
+}
+// Booking notes minus the automatic "Transferred to/from…" fragments (the
+// kennel timeline shows that now).
+function cleanBookingNotes(n) {
+  if (!n) return '';
+  return n.split(' · ').filter(p => !/^(Transferred (to|from) |Swapped with )/.test(p.trim())).join(' · ').trim();
+}
+function stayTimelineHTML(b, currentId) {
+  const r = stayRange(b);
+  const trs = stayTransfers(b);
+  if (r.legs.length < 2 && !trs.length) return '';
+  const esc = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const nightsOf = x => (x.check_in_date && x.check_out_date) ? diffDays(x.check_in_date, x.check_out_date) + 1 : 0;
+  const legRows = r.legs.length > 1 ? r.legs.map(x => {
+    const n = nightsOf(x);
+    return `<div class="st-leg${x.id === currentId ? ' st-cur' : ''}"><span class="st-k">${kLabel(x.kennel_number)}</span><span>${fmtDate(x.check_in_date)} → ${fmtDate(x.check_out_date)}</span><span class="st-n">${n} night${n === 1 ? '' : 's'}</span></div>`;
+  }).join('') : '';
+  const trRows = trs.map(t => `<div class="st-tr">⇄ ${t.transfer_date ? fmtDate(t.transfer_date) : ''} · ${kLabel(t.from_kennel)} → ${kLabel(t.to_kennel)} — <span id="st-reason-${t.id}">${t.reason ? esc(t.reason) : '<span class="st-noreason">no reason recorded</span>'}</span> <a class="bd-edit" onclick="editTransferReason('${t.id}')">${t.reason ? 'edit' : 'add reason'}</a></div>`).join('');
+  return `<div class="st-box">${legRows ? `<div class="st-title">Kennels during this stay</div>${legRows}` : ''}${trRows ? `<div class="${legRows ? 'st-sub' : 'st-title'}">Transfers <span style="text-transform:none;font-weight:400;letter-spacing:0">(internal)</span></div>${trRows}` : ''}</div>`;
+}
+async function editTransferReason(id) {
+  const t = (_transfers || []).find(x => x.id === id);
+  if (!t) return;
+  const v = prompt(`Reason for moving ${kLabel(t.from_kennel)} → ${kLabel(t.to_kennel)}${t.transfer_date ? ' on ' + fmtDate(t.transfer_date) : ''} (internal only):`, t.reason || '');
+  if (v === null) return;
+  const reason = v.trim() || null;
+  const { error } = await db.from('booking_transfers').update({ reason }).eq('id', id);
+  if (error) { showToast(error.message || 'Could not save the reason', 'error'); return; }
+  t.reason = reason;
+  const el = document.getElementById('st-reason-' + id);
+  if (el) {
+    el.innerHTML = reason ? reason.replace(/&/g,'&amp;').replace(/</g,'&lt;') : '<span class="st-noreason">no reason recorded</span>';
+    const link = el.nextElementSibling; if (link) link.textContent = reason ? 'edit' : 'add reason';
+  }
+  showToast('Transfer reason saved');
+}
+async function logTransfer(row) {
+  const { data, error } = await db.from('booking_transfers').insert(row).select().single();
+  if (error) { showToast('Transfer done, but the reason could not be saved: ' + (error.message || ''), 'error'); return; }
+  if (data) _transfers.push(data);
 }
 
 // ── BOOKING TYPE ───────────────────────────────────────────────────────
@@ -2896,9 +3029,18 @@ function openLogCheckout(booking) {
     mbItemCount ? `${mbItemCount} item${mbItemCount === 1 ? '' : 's'}` : '',
   ].filter(Boolean).map(x => '· ' + x).join(' ');
 
-  const body = groupNotice + dogsBlock + `
+  // Transferred stay: show the whole stay and its kennels; the date fields
+  // below only cover the leg in this kennel.
+  const _trStay = isTransferredStay(b);
+  const _trSr = stayRange(b);
+  const _trFirst = !_trStay || _trSr.legs[0].id === b.id;
+  const trBox = stayTimelineHTML(b, b.id)
+    ? `<div class="form-field">${stayTimelineHTML(b, b.id)}${_trStay ? `<div class="mb-hint" style="margin-top:0.3rem">Whole stay ${fmtDate(_trSr.start)} → ${fmtDate(_trSr.end)}, invoiced as one. The dates below are for ${kLabel(b.kennel_number)} only.</div>` : ''}</div>`
+    : '';
+
+  const body = groupNotice + trBox + dogsBlock + `
     <div class="form-row-2">
-      <div class="form-field"><label>Check-in date</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
+      <div class="form-field"><label>${_trFirst ? 'Check-in date' : 'In ' + kLabel(b.kennel_number) + ' from'}</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
       <div class="form-field"><label>Check-in time</label><input type="time" id="f-in-time" value="${b.check_in_time ? b.check_in_time.slice(0,5) : ''}"></div>
     </div>
     <div class="form-row-2">
@@ -3092,7 +3234,8 @@ async function manageBookingSave(bookingId) {
     if (inDate && outDate && btype !== 'owner') {
       const ovEl = document.getElementById('f-days-override');
       const hasOv = ovEl && ovEl.value !== '' && !isNaN(parseInt(ovEl.value, 10));
-      const days  = hasOv ? parseInt(ovEl.value, 10) : computeBillingDays(inDate, inTime, outDate, outTime);
+      const bill0 = stayBillingStart(b, inDate, inTime);
+      const days  = hasOv ? parseInt(ovEl.value, 10) : computeBillingDays(bill0.date, bill0.time, outDate, outTime);
       const weeks = days >= 7 ? Math.floor(days / 7) : null;
       const offsite    = document.getElementById('f-offsite').checked;
       const outside    = document.getElementById('f-outside').checked;
@@ -3151,7 +3294,8 @@ async function manageBookingCheckout(bookingId) {
 
     if (!outTime) throw new Error('Check-out time is required');
 
-    const days    = computeBillingDays(inDate, inTime, outDate, outTime);
+    const bill0   = stayBillingStart(b, inDate, inTime);   // transferred stay → from its first night
+    const days    = computeBillingDays(bill0.date, bill0.time, outDate, outTime);
     const weeks   = days >= 7 ? Math.floor(days / 7) : null;
     const invDate = nextWorkday(outDate);
 
@@ -3288,6 +3432,9 @@ function openTransferKennel(bookingId) {
         <input type="date" id="tk-date" value="${defDate}" min="${b.check_in_date || ''}" max="${b.check_out_date || ''}">
       </div>
     </div>
+    <div class="form-field"><label>Reason for transfer * <span style="text-transform:none;font-weight:400;letter-spacing:0;color:#94a3b8">— internal only</span></label>
+      <textarea id="tk-reason" rows="2" placeholder="e.g. Latch on K6 broken; fence-fighting with neighbour"></textarea>
+    </div>
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:0.5rem 0.75rem;font-size:0.8rem;color:#92400e">⚠ To move the <strong>whole</strong> booking with no split (e.g. the dog just checked in and hasn't stayed a night yet), set the transfer date to the <strong>check-in date (${fmtDate(b.check_in_date)})</strong> — any later date leaves a leftover day behind on ${curLabel}.</div>`;
   openModal('Transfer ' + b.dog_name + ' — from ' + curLabel, body, null);
   document.getElementById('modal-footer').innerHTML = `
@@ -3306,6 +3453,8 @@ async function doTransferKennel(bookingId) {
     if (!newKennel) throw new Error('Pick a kennel');
     if (newKennel === b.kennel_number) throw new Error('That is the current kennel');
     if (!D) throw new Error('Pick a transfer date');
+    const tkReason = (document.getElementById('tk-reason')?.value || '').trim();
+    if (!tkReason) throw new Error('Please give a reason for the transfer');
     if (b.check_out_date && D > b.check_out_date) throw new Error('Transfer date is after the checkout date');
 
     const oldKennel = b.kennel_number;
@@ -3337,6 +3486,8 @@ async function doTransferKennel(bookingId) {
         if (r1.error) throw r1.error;
         const r2 = await db.from('bookings').update({ kennel_number: oldKennel, notes: noteO, updated_at: new Date().toISOString() }).eq('id', occupant.id);
         if (r2.error) throw r2.error;
+        await logTransfer({ booking_id: b.id, transfer_group_id: b.transfer_group_id || null, from_kennel: oldKennel, to_kennel: newKennel, transfer_date: D, reason: tkReason });
+        await logTransfer({ booking_id: occupant.id, transfer_group_id: occupant.transfer_group_id || null, from_kennel: newKennel, to_kennel: oldKennel, transfer_date: D, reason: `Swapped with ${b.dog_name}: ${tkReason}` });
         closeModal();
         showToast(`Swapped ${b.dog_name} ↔ ${occupant.dog_name} (${kLabel(oldKennel)} ↔ ${kLabel(newKennel)})`);
         await loadAll();
@@ -3346,6 +3497,7 @@ async function doTransferKennel(bookingId) {
         .update({ kennel_number: newKennel, updated_at: new Date().toISOString() })
         .eq('id', b.id);
       if (error) throw error;
+      await logTransfer({ booking_id: b.id, transfer_group_id: b.transfer_group_id || null, from_kennel: oldKennel, to_kennel: newKennel, transfer_date: D, reason: tkReason });
       closeModal();
       showToast(`${b.dog_name} moved to ${kLabel(newKennel)}`);
       await loadAll();
@@ -3375,6 +3527,7 @@ async function doTransferKennel(bookingId) {
       transfer_group_id: transferGroupId,
       kennel_number: oldKennel,
       check_in_date: b.check_in_date,
+      check_in_time: b.check_in_time || null,   // the stay's real arrival time stays on its first leg
       check_out_date: lastNightOld,
       status: histStatus,
       household_id: b.household_id || null,
@@ -3387,9 +3540,10 @@ async function doTransferKennel(bookingId) {
     // Continuing segment → new kennel from D.
     const contNote = (b.notes ? b.notes + ' · ' : '') + `Transferred from ${kLabel(oldKennel)} on ${D} (full stay began ${b.check_in_date})`;
     const { error: contErr } = await db.from('bookings')
-      .update({ kennel_number: newKennel, check_in_date: D, notes: contNote, transfer_group_id: transferGroupId, updated_at: new Date().toISOString() })
+      .update({ kennel_number: newKennel, check_in_date: D, check_in_time: null, notes: contNote, transfer_group_id: transferGroupId, updated_at: new Date().toISOString() })
       .eq('id', b.id);
     if (contErr) throw contErr;
+    await logTransfer({ booking_id: b.id, transfer_group_id: transferGroupId, from_kennel: oldKennel, to_kennel: newKennel, transfer_date: D, reason: tkReason });
 
     // The old kennel still has to be cleaned — the dog really did stay in it.
     // The stay's existing post-checkout cleaning is sitting on the old kennel
@@ -4191,6 +4345,11 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     </div>
     <div class="form-field"><label>Notes</label><textarea id="f-notes" rows="2" placeholder="Optional"></textarea></div>`;
 
+  // Retry-safe save: every booking row gets an id chosen ONCE per open form, and
+  // the save upserts on that id. If a save stores the booking but then loses the
+  // connection ("Failed to fetch"), pressing Save again updates the same rows
+  // instead of creating a duplicate booking. (Bug 2026-10-15: Owner trip booked twice.)
+  const abSave = { ids: {}, groupId: null, written: new Set() };
   openModal('Add Booking', body, async () => {
     const cinDate  = document.getElementById('f-cin-date').value;
     const cinTime  = document.getElementById('f-cin-time').value || null;
@@ -4206,6 +4365,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     // Gather dog rows (preserving any pre-picked dog_id)
     const rows = [...document.querySelectorAll('.ab-dog-row')];
     const dogs = rows.map(r => ({
+      key:    r.dataset.row,
       name:   r.querySelector('.ab-dog-name').value.trim(),
       dogId:  r.querySelector('.ab-dog-id').value || null,
       kennel: parseInt(r.querySelector('.ab-dog-kennel').value),
@@ -4255,6 +4415,10 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       const { data: h, error: hErr } = await db.from('households').insert({ owner_name: ownerTyped }).select().single();
       if (hErr) throw hErr;
       householdId = h.id;
+      // Remember it on the form so a retried save reuses this customer.
+      const hhEl = document.getElementById('ab-owner-hh');
+      if (hhEl) hhEl.value = h.id;
+      (_households || []).push(h);
     }
 
     // Ensure-or-create a dog record per row when a household is set.
@@ -4300,11 +4464,12 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     ].filter(Boolean).join(' ') || null;
 
     // Multi-dog bookings share a booking_group_id so future edits cascade
-    const groupId = dogs.length > 1 ? crypto.randomUUID() : null;
+    const groupId = dogs.length > 1 ? (abSave.groupId ||= crypto.randomUUID()) : null;
     let abType = readBookingType('f-btype-new') || 'standard';
     if (abType === 'standard' && isOwnerHousehold(householdId)) abType = 'owner';
     const abFlags = bookingTypeFlags(abType);
     const rowsToInsert = dogs.map(d => ({
+      id: (abSave.ids[d.key] ||= crypto.randomUUID()),
       dog_name: d.name,
       ...abFlags,
       dog_id:   d.dogId || null,
@@ -4318,7 +4483,18 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
       booking_group_id: groupId,
       notes: notesFull,
     }));
-    const { data: insertedBookings, error } = await db.from('bookings').insert(rowsToInsert).select();
+    // A row removed from the form after an earlier, half-finished save: drop it.
+    const keepIds = new Set(rowsToInsert.map(r => r.id));
+    const staleIds = [...abSave.written].filter(id => !keepIds.has(id));
+    if (staleIds.length) {
+      await db.from('cleanings').delete().in('booking_id', staleIds);
+      const { error: stErr } = await db.from('bookings').delete().in('id', staleIds);
+      if (stErr) throw stErr;
+      staleIds.forEach(id => abSave.written.delete(id));
+    }
+    rowsToInsert.forEach(r => abSave.written.add(r.id));
+    const { data: insertedBookings, error } = await db.from('bookings')
+      .upsert(rowsToInsert, { onConflict: 'id' }).select();
     if (error) throw error;
 
     // Pre-book the post-checkout cleaning now (don't wait until checkout) so it
@@ -6508,8 +6684,8 @@ function bkRenderHistoryBar(rows) {
   const all = (_bookings || []).filter(bkHistMatch);
   const stays = all.filter(b => b.status !== 'cancelled');
   // A multi-dog visit is one stay for the owner (one row per dog in the DB).
-  const visits = rs => new Set(rs.map(b => b.booking_group_id || b.id)).size;
-  const nStays = _bkHistKind === 'owner' ? visits(stays) : stays.length;
+  const visits = rs => new Set(rs.map(b => stayKey(b))).size;
+  const nStays = _bkHistKind === 'owner' ? visits(stays) : new Set(stays.map(b => b.transfer_group_id || b.id)).size;
   const cancelled = _bkHistKind === 'owner' ? visits(all.filter(b => b.status === 'cancelled')) : all.length - stays.length;
   const nights = stays.reduce((n, b) => n + ((b.check_in_date && b.check_out_date) ? diffDays(b.check_in_date, b.check_out_date) + 1 : 0), 0);
   const first = stays.map(b => b.check_in_date).filter(Boolean).sort()[0];
@@ -6539,18 +6715,30 @@ function bkStatusBadge(status) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+// One row per transferred stay (its current leg stands in for the whole stay).
+function bkCollapseTransfers(list) {
+  const out = [], seen = new Set();
+  for (const b of list) {
+    if (!b.transfer_group_id || b.status === 'cancelled') { out.push(b); continue; }
+    if (seen.has(b.transfer_group_id)) continue;
+    seen.add(b.transfer_group_id);
+    out.push(stayCurrentLeg(b));
+  }
+  return out;
+}
+
 function renderBookings() {
   const body = document.getElementById('bookings-body');
   if (!body) return;
   const td = todayStr();
   const q = (_bkSearch || '').trim().toLowerCase();
 
-  let rows = [..._bookings];
+  let rows = bkCollapseTransfers([..._bookings]);
   if (_bkHistKind) rows = rows.filter(bkHistMatch);
   bkRenderHistoryBar(rows);
   if (_bkStatus !== 'all') rows = rows.filter(b => b.status === _bkStatus);
-  if (_bkKennel !== 'all') rows = rows.filter(bkKennelMatch);
-  if (_bkUpcoming) rows = rows.filter(b => !b.check_out_date || b.check_out_date >= td);
+  if (_bkKennel !== 'all') rows = rows.filter(b => stayLegs(b).some(bkKennelMatch));
+  if (_bkUpcoming) rows = rows.filter(b => { const e = stayRange(b).end; return !e || e >= td; });
   if (q) {
     rows = rows.filter(b => {
       const owner = (_households || []).find(h => h.id === b.household_id);
@@ -6562,7 +6750,7 @@ function renderBookings() {
   // Most recent / nearest-future check-in first, so a just-entered mistake
   // (like a same-day duplicate) surfaces at the top of the list.
   rows.sort((a, b) => {
-    const d = (b.check_in_date || '').localeCompare(a.check_in_date || '');
+    const d = (stayRange(b).start || '').localeCompare(stayRange(a).start || '');
     if (d !== 0) return d;
     return (b.created_at || '').localeCompare(a.created_at || '');
   });
@@ -6578,17 +6766,19 @@ function renderBookings() {
   let html = '<div style="display:flex;flex-direction:column;gap:0.4rem">';
   rows.forEach(b => {
     const owner = (_households || []).find(h => h.id === b.household_id);
-    const kennelLabel = kLabel(b.kennel_number);
+    const kennelLabel = stayKennelsLabel(b);
+    const _bkSr = stayRange(b);
     const groupCount = b.booking_group_id
       ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && (x.status === 'cancelled') === (b.status === 'cancelled')).length
       : 1;
-    const groupTag = (groupCount > 1 ? ` <span class="badge badge-purple" style="font-size:0.6rem">group of ${groupCount}</span>` : '') + (bookingTypeBadge(b, true) ? ' ' + bookingTypeBadge(b, true) : '');
+    const groupTag = (groupCount > 1 ? ` <span class="badge badge-purple" style="font-size:0.6rem">group of ${groupCount}</span>` : '') + (bookingTypeBadge(b, true) ? ' ' + bookingTypeBadge(b, true) : '')
+      + (_bkSr.legs.length > 1 ? ` <span class="badge badge-blue" style="font-size:0.6rem" title="Moved between kennels during the stay">⇄ transferred</span>` : '');
     html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;padding:0.55rem 0.6rem;border:1px solid #e2e8f0;border-radius:8px;background:white;cursor:pointer"
                   onclick="openBookingChooser('${b.id}')"
                   onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:0.9rem">${isCatBooking(b) ? '🐈' : '🐾'} ${b.dog_name}${groupTag}</div>
-        <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner ? owner.owner_name : '(no owner on file)'} &middot; ${fmtDateY(b.check_in_date)} &rarr; ${fmtDateY(b.check_out_date)}</div>
+        <div style="font-size:0.78rem;color:#64748b;margin-top:0.1rem">${owner ? owner.owner_name : '(no owner on file)'} &middot; ${fmtDateY(_bkSr.start)} &rarr; ${fmtDateY(_bkSr.end)}</div>
       </div>
       <span class="badge badge-gray" style="font-size:0.7rem">${kennelLabel}</span>
       ${bkStatusBadge(b.status)}
@@ -6861,7 +7051,11 @@ function getPriorRange(start,end){
 function computeReportMetrics(start,end){
   // The owner's own animals (owner_booking) are left out of every report figure.
   const repBookings = (_bookings || []).filter(b => !b.owner_booking);
-  const grp = b => b.booking_group_id || b.id;
+  // One logical stay: multi-dog group, or the legs of a transferred stay.
+  const grp = b => stayKey(b);
+  const dogStay = b => b.transfer_group_id || b.id;          // one dog's whole stay
+  const firstLeg = b => { const l = stayLegs(b); return !l.length || l[0].id === b.id; };
+  const lastLeg  = b => { const l = stayLegs(b); return !l.length || l[l.length - 1].id === b.id; };
   const inP = d => d && d>=start && d<=end;
   const overlaps = b => b.check_in_date && b.check_out_date && b.check_in_date<=end && b.check_out_date>=start;
   const periodDays = diffDays(start,end)+1;
@@ -6907,8 +7101,9 @@ function computeReportMetrics(start,end){
   const seenGroup=new Set(), custDays={}, custBk={};
   allOverlap.forEach(b=>{   // dogs AND cats — this is about the customer, not the kennel
     const g=grp(b); if (seenGroup.has(g)) return; seenGroup.add(g);
-    const s=b.check_in_date>start?b.check_in_date:start;
-    const e=b.check_out_date<end?b.check_out_date:end;
+    const sr=stayRange(b);
+    const s=sr.start>start?sr.start:start;
+    const e=sr.end<end?sr.end:end;
     const nights=diffDays(s,e)+1; if (nights<=0) return;
     const hid=b.household_id||'__none';
     custDays[hid]=(custDays[hid]||0)+nights;
@@ -6922,9 +7117,9 @@ function computeReportMetrics(start,end){
 
   // Avg full stay length for groups checking in this period
   const stayGroups=new Set(); let staySum=0, stayN=0;
-  boarding.filter(b=>inP(b.check_in_date)).forEach(b=>{
+  boarding.filter(b=>inP(stayRange(b).start)).forEach(b=>{
     const g=grp(b); if (stayGroups.has(g)) return; stayGroups.add(g);
-    const n=diffDays(b.check_in_date,b.check_out_date)+1; if (n>0){ staySum+=n; stayN++; }
+    const sr=stayRange(b); const n=diffDays(sr.start,sr.end)+1; if (n>0){ staySum+=n; stayN++; }
   });
 
   // Busiest kennel
@@ -6948,16 +7143,16 @@ function computeReportMetrics(start,end){
     for (let d=cs; d<=ce; d=_rshift(d,1)) spaceUnits(b.kennel_number).forEach(u=> catUnitSet.add(u+'|'+d));
   });
   const catStayGroups=new Set(); let catStaySum=0, catStayN=0;
-  catBoarding.filter(b=>inP(b.check_in_date)).forEach(b=>{
+  catBoarding.filter(b=>inP(stayRange(b).start)).forEach(b=>{
     const g=grp(b); if (catStayGroups.has(g)) return; catStayGroups.add(g);
-    const n=diffDays(b.check_in_date,b.check_out_date)+1; if (n>0){ catStaySum+=n; catStayN++; }
+    const sr=stayRange(b); const n=diffDays(sr.start,sr.end)+1; if (n>0){ catStaySum+=n; catStayN++; }
   });
 
   return {
     periodDays,
-    dogs: boardingOverlap.length,
-    checkins: boarding.filter(b=>inP(b.check_in_date)).length,
-    checkouts: boarding.filter(b=>inP(b.check_out_date)).length,
+    dogs: new Set(boardingOverlap.map(dogStay)).size,
+    checkins: boarding.filter(b=>inP(b.check_in_date) && firstLeg(b)).length,
+    checkouts: boarding.filter(b=>inP(b.check_out_date) && lastLeg(b)).length,
     bookings: bookingsCount,
     cancellations: new Set(repBookings.filter(b=> b.status==='cancelled' && !b.dog_pound && !isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
     daysBooked: knSet.size,
@@ -6973,7 +7168,7 @@ function computeReportMetrics(start,end){
     avgDogsAtOnce: elapsedDays? dogNights/elapsedDays : 0,
     peakDogs,
     peakDate,
-    avgDogsPerBooking: bookingsCount? boardingOverlap.length/bookingsCount : 0,
+    avgDogsPerBooking: bookingsCount? new Set(boardingOverlap.map(dogStay)).size/bookingsCount : 0,
     newCustomers: _households.filter(h=> !h.is_owner && h.created_at && inP(h.created_at.slice(0,10))).length,
     compassionate: new Set(boardingOverlap.filter(b=>b.compassionate_care).map(grp)).size,
     poundStays: new Set(repBookings.filter(b=> b.dog_pound && b.status!=='cancelled' && overlaps(b)).map(grp)).size,
@@ -6987,9 +7182,9 @@ function computeReportMetrics(start,end){
     topCustomers,
 
     // Cat Condo (kept out of every KPI above)
-    cats: catOverlap.length,
-    catCheckins: catBoarding.filter(b=>inP(b.check_in_date)).length,
-    catCheckouts: catBoarding.filter(b=>inP(b.check_out_date)).length,
+    cats: new Set(catOverlap.map(dogStay)).size,
+    catCheckins: catBoarding.filter(b=>inP(b.check_in_date) && firstLeg(b)).length,
+    catCheckouts: catBoarding.filter(b=>inP(b.check_out_date) && lastLeg(b)).length,
     catBookings: new Set(catOverlap.map(grp)).size,
     catCancellations: new Set(repBookings.filter(b=> b.status==='cancelled' && isCatBooking(b) && inP(b.check_in_date)).map(grp)).size,
     catCondoNights: catUnitSet.size,
