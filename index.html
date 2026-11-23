@@ -309,6 +309,11 @@
     .kc-cell.kc-clean-done::before { content: '✓ 🧹'; }
     /* Completed cleaning overlapping a booking block — checkmark broom overlay */
     .kc-cell.kc-clean-done-marker::after { content: '✓🧹'; position: absolute; top: 1px; right: 2px; font-size: 0.55rem; line-height: 1; }
+    /* Tentative booking: diagonal stripes over the normal status colour + a [Tentative] tag */
+    .kc-cell.kc-tentative { background-image: repeating-linear-gradient(45deg, rgba(100,116,139,0.28) 0 2px, transparent 2px 8px); outline: 1px dashed #94a3b8; outline-offset: -1px; }
+    .kc-tentative-tag { display: block; font-size: 0.55rem; font-weight: 700; color: #475569; letter-spacing: 0.02em; }
+    .bk-tentative-box { background: repeating-linear-gradient(45deg, #f8fafc 0 6px, #eef2f7 6px 12px); border: 1px dashed #94a3b8; border-radius: 6px; padding: 0.45rem 0.7rem; margin-bottom: 0.75rem; }
+    .bk-tentative-box .form-check { margin: 0; }
     .kc-cell-shared { display: inline-block; font-size: 0.55rem; margin-left: 2px; vertical-align: super; }
 
     /* ---- Form elements (in modal) ---- */
@@ -2615,7 +2620,7 @@ function openBookingChooser(bookingId) {
     }
   }
 
-  const body = `<div style="margin-bottom:0.5rem"><span class="badge ${sCls}">${sLabel}</span> ${bookingTypeBadge(b)}</div>
+  const body = `<div style="margin-bottom:0.5rem"><span class="badge ${sCls}">${sLabel}</span> ${bookingTypeBadge(b)}${isTentative(b) ? ' <span class="badge badge-gray">[Tentative]</span>' : ''}</div>
     ${cleanWarn}
     ${ownerSec}
     ${staySec}
@@ -2816,6 +2821,12 @@ function bookingTypeBadge(b, small) {
     case 'pound':         return `<span class="badge badge-gray"${st}>🏛️ Dog pound</span>`;
     default:              return '';
   }
+}
+// Tentative booking: a hold that may still be deleted. Shown striped with a
+// [Tentative] tag on the Expanded calendar until the dogs are checked in.
+function isTentative(b) { return !!(b && b.tentative && b.status === 'pending'); }
+function tentativeCheckboxHTML(id, checked) {
+  return `<div class="bk-tentative-box"><div class="form-check"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><label for="${id}"><strong>Tentative booking</strong> <span class="mb-hint">— not confirmed yet; may be deleted</span></label></div></div>`;
 }
 // Manage Booking: show/hide the bits that don't apply to an owner booking.
 function mbTypeChanged() {
@@ -3038,7 +3049,8 @@ function openLogCheckout(booking) {
     ? `<div class="form-field">${stayTimelineHTML(b, b.id)}${_trStay ? `<div class="mb-hint" style="margin-top:0.3rem">Whole stay ${fmtDate(_trSr.start)} → ${fmtDate(_trSr.end)}, invoiced as one. The dates below are for ${kLabel(b.kennel_number)} only.</div>` : ''}</div>`
     : '';
 
-  const body = groupNotice + trBox + dogsBlock + `
+  const tentGroup = b.booking_group_id ? _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled') : [b];
+  const body = tentativeCheckboxHTML('f-tentative', tentGroup.some(x => x.tentative)) + groupNotice + trBox + dogsBlock + `
     <div class="form-row-2">
       <div class="form-field"><label>${_trFirst ? 'Check-in date' : 'In ' + kLabel(b.kennel_number) + ' from'}</label><input type="date" id="f-in-date" value="${b.check_in_date || ''}"></div>
       <div class="form-field"><label>Check-in time</label><input type="time" id="f-in-time" value="${b.check_in_time ? b.check_in_time.slice(0,5) : ''}"></div>
@@ -3215,6 +3227,16 @@ async function manageBookingSave(bookingId) {
       else pickupUpd = pickupUpd.eq('id', bookingId);
       const { error: puErr } = await pickupUpd;
       if (puErr) throw puErr;
+    }
+
+    // Tentative flag applies to every dog in the booking and every leg of a transferred stay.
+    const tentEl = document.getElementById('f-tentative');
+    if (tentEl && b) {
+      const tIds = new Set([bookingId]);
+      if (b.booking_group_id) _bookings.filter(x => x.booking_group_id === b.booking_group_id && x.status !== 'cancelled').forEach(x => tIds.add(x.id));
+      stayLegs(b).forEach(x => tIds.add(x.id));
+      const { error: tErr } = await db.from('bookings').update({ tentative: tentEl.checked }).in('id', [...tIds]);
+      if (tErr) throw tErr;
     }
 
     // Owner bookings are never invoiced. If this stay was already invoiced before
@@ -3665,6 +3687,7 @@ function openLogCheckin(booking) {
       check_in_time: inTime,
       off_site_pickup: pickup,
       status: 'active',
+      tentative: false,   // checked in = no longer tentative
       updated_at: new Date().toISOString(),
     }).in('id', bookingIds);
     if (error) throw error;
@@ -4318,7 +4341,7 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
   // Booking a cat condo cell in the calendar opens the form already in cat mode.
   _abIsCat = isCatSpace(defaultKennel);
 
-  const body = `
+  const body = tentativeCheckboxHTML('f-tentative-new', false) + `
     <div class="form-field"><label>Owner</label>
       ${ownerPickerHTML('ab-owner', '', '')}
     </div>
@@ -4468,10 +4491,12 @@ function openAddBooking(defaultKennel = null, defaultDate = null) {
     let abType = readBookingType('f-btype-new') || 'standard';
     if (abType === 'standard' && isOwnerHousehold(householdId)) abType = 'owner';
     const abFlags = bookingTypeFlags(abType);
+    const abTentative = !!document.getElementById('f-tentative-new')?.checked;
     const rowsToInsert = dogs.map(d => ({
       id: (abSave.ids[d.key] ||= crypto.randomUUID()),
       dog_name: d.name,
       ...abFlags,
+      tentative: abTentative,
       dog_id:   d.dogId || null,
       kennel_number: d.kennel,
       check_in_date: cinDate,
@@ -4812,8 +4837,10 @@ function renderKennelCalendar() {
         if (!showName) cls += ' kc-span-mid';
         const sharedFlag = bArr.some(bk => bk.notes && bk.notes.toLowerCase().includes('shared kennel'));
         const names = bArr.map(bk => bk.dog_name).join('+');
-        label = showName ? `${names}${sharedFlag ? '<span class="kc-cell-shared" title="Shared kennel">⚠</span>' : ''}` : '·';
-        const titleNames = bArr.map(bk => `${bk.dog_name} (${bk.status})`).join(', ');
+        const tentative = bArr.some(isTentative);
+        if (tentative) cls += ' kc-tentative';
+        label = showName ? `${names}${sharedFlag ? '<span class="kc-cell-shared" title="Shared kennel">⚠</span>' : ''}${tentative ? '<span class="kc-tentative-tag">[Tentative]</span>' : ''}` : '·';
+        const titleNames = bArr.map(bk => `${bk.dog_name} (${isTentative(bk) ? 'tentative' : bk.status})`).join(', ');
         attrs = `data-booking="${b.id}" title="${kLabel(k)} — ${titleNames}"`;
         // Cancelled booking overlay: small brown strip at the bottom of the cell
         if (bCanc) {
